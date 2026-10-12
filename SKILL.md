@@ -1,6 +1,6 @@
 ---
 name: plf-cli-agent
-description: Resolve Chinese stock or futures names to current Panlifang contract keys, generate or modify Ejia formula source, compile and repair it through plf-cli, optionally run sequential single-parameter backtests, or manage a registered formula's background executor when both CLI and EJClient advertise executor v1. Never use batch grid optimization or search project and installation directories.
+description: 用于盘立方指标编辑器公式的生成、修改、编译、错误修复与策略回测。使用前必须打开盘立方客户端，首次使用时需提供盘立方安装目录。支持按指定合约、周期、时间区间和单组参数运行回测，分析收益、回撤、胜率等指标，并在用户要求时逐轮调参。
 ---
 
 # 盘立方公式生成与编译调试
