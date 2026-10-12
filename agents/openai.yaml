@@ -1,0 +1,4 @@
+interface:
+  display_name: "盘立方公式与单组回测"
+  short_description: "生成修复公式，支持五分钟倍数与小时周期，按单组参数回测调参"
+  default_prompt: "Use $plf-cli-agent to generate and compile an Ejia formula, then run one explicit parameter set at a time on a supported period for my contract and date range; analyze each full report before the next set, apply task-local fees or slippage only when I request them, and never use optimize or grid expansion."
