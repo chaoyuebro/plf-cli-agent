@@ -3,8 +3,8 @@
 // 用法:
 //   node verify_render.js <图表HTML绝对路径> <截图输出.png> [canvasId]
 //
-// 作用: 用本机已装的 Chrome 验证内置 SVG 或 Chart.js 图表，
-//       读取实际渲染的横轴刻度，并算出相邻标签的最小像素间距。
+// 作用: 用本机已装的 Chrome 跑 headless，直接问 Chart.js
+//       「你到底渲染了哪些横轴刻度」，并算出相邻标签的最小像素间距。
 //       不靠肉眼截图判断重叠。
 //
 // 判据: renderedCount > 0 且 minGap > 40px
@@ -28,29 +28,9 @@ const CHROME = process.env.CHROME_PATH ||
 
   await page.goto('file:///' + FILE.replace(/\\/g, '/'), { waitUntil: 'networkidle' });
   await page.waitForTimeout(1200);
-  if (!CANVAS_ID && await page.locator('svg.equity-chart').count()) await page.locator('svg.equity-chart').first().scrollIntoViewIfNeeded();
 
   // 关键: 调用户自己的 ticks.callback 求值，只保留非空结果 = 真实渲染的刻度
   const info = await page.evaluate((wantId) => {
-    const svg = document.querySelector('svg.equity-chart');
-    if (!wantId && svg) {
-      const bounds = svg.getBoundingClientRect();
-      const ticks = [...svg.querySelectorAll('.equity-tick')];
-      const path = svg.querySelector('.equity-line');
-      const pathBounds = path ? path.getBBox() : null;
-      const top = Number(svg.dataset.top), bottom = Number(svg.dataset.bottom);
-      return {
-        renderer: 'svg', chartWidth: bounds.width, wrapWidth: bounds.width,
-        renderedCount: ticks.length, rendered: ticks.map(t => t.textContent),
-        renderedIdx: ticks.map(t => Number(t.dataset.index)),
-        xLeft: bounds.left + Number(svg.dataset.left) / 1000 * bounds.width,
-        xRight: bounds.left + Number(svg.dataset.right) / 1000 * bounds.width,
-        hasYTitle: false, pointCount: Number(svg.dataset.pointCount),
-        pathInBounds: !!pathBounds && pathBounds.y >= top - 0.01 && pathBounds.y + pathBounds.height <= bottom + 0.01,
-        curveVisible: !!path && getComputedStyle(path).display !== 'none' && getComputedStyle(path).stroke !== 'none' && path.getTotalLength() > 0,
-        minTextGap: ticks.length > 1 ? Math.min(...ticks.slice(1).map((t, i) => t.getBoundingClientRect().left - ticks[i].getBoundingClientRect().right)) : null
-      };
-    }
     let canvas = wantId ? document.getElementById(wantId) : null;
     if (!canvas) canvas = document.querySelector('canvas');
     if (!canvas) return { error: 'no canvas found' };
@@ -97,8 +77,6 @@ const CHROME = process.env.CHROME_PATH ||
   if (info.error) verdict.push('FAIL ' + info.error);
   else {
     if (info.renderedCount === 0) verdict.push('FAIL no x-axis labels rendered');
-    if (info.renderer === 'svg' && (!info.curveVisible || !info.pathInBounds || info.pointCount < 2)) verdict.push('FAIL invalid SVG equity curve');
-    if (info.renderer === 'svg' && info.minTextGap !== null && info.minTextGap < 0) verdict.push('FAIL overlapping x-axis labels');
     if (minGap !== null && minGap < 40) verdict.push('WARN minGap=' + minGap + 'px (<40, may touch)');
     if (info.hasYTitle) verdict.push('WARN y-axis title is displayed (can overlap 6-digit ticks)');
     if (verdict.length === 0) verdict.push('PASS');
