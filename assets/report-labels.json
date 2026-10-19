@@ -1,0 +1,52 @@
+{
+  "fields": {
+    "net_profit": "净利润", "max_drawdown": "最大回撤（含浮盈）", "trades": "交易次数", "win_rate": "胜率", "win_lose_ratio": "盈亏比",
+    "kind_total": "全部交易", "kind_long": "多头交易", "kind_short": "空头交易", "start_fund": "初始资金", "last_assets": "期末权益",
+    "total_profit": "累计净利润", "profit": "盈亏", "profit_ratio": "收益率", "total_win": "盈利总额", "total_lose": "亏损总额", "cost": "手续费",
+    "all_times": "交易总次数", "all_trade": "交易总笔数", "win_times": "盈利次数", "win_trade": "盈利笔数", "lose_times": "亏损次数", "lose_trade": "亏损笔数",
+    "max_assets": "最高权益", "min_assets": "最低权益", "max_retracement": "最大回撤（含浮盈）", "liquidated_profit": "平仓盈亏（未扣手续费）", "hold_profit": "持仓盈亏",
+    "trade_lots": "交易笔数", "win_lots": "盈利笔数", "lose_lots": "亏损笔数", "even_lots": "持平笔数", "avg_win": "平均盈利", "avg_lose": "平均亏损",
+    "avg_profit": "平均盈亏", "avg_hold_period": "平均持仓周期", "avg_win_period": "盈利交易平均持仓周期", "avg_lose_period": "亏损交易平均持仓周期", "avg_even_period": "持平交易平均持仓周期",
+    "max_consecutive_lose": "最大连续亏损次数", "max_consecutive_win": "最大连续盈利次数", "consecutive_lose": "最大连续亏损次数", "consecutive_win": "最大连续盈利次数",
+    "max_win": "单笔最大盈利", "max_lose": "单笔最大亏损", "total_cost": "手续费总额", "max_used_fund": "最大资金占用",
+    "max_drawdown_prior_high_ratio": "最大回撤占前高比例", "sharpe_ratio": "夏普比率", "annual_profit_ratio": "年化收益率", "effective_profit_ratio": "有效收益指标",
+    "hold_time": "持仓时长", "hold_time_ratio": "持仓时间占比", "net_profit_drawdown_ratio": "净利润回撤比", "max_premium_prior_low_ratio": "最大上涨占前低比例",
+    "monthly_avg_profit": "月均盈亏", "max_empty_days": "最长空仓天数", "total_hold_period": "总持仓周期数", "total_trade_time": "总交易时间",
+    "available": "可用资金", "margin": "保证金", "empty_assets": "空仓权益", "elapsed_seconds": "耗时（秒）", "event_times": "事件次数", "event_trade": "事件交易笔数",
+    "max_retracement_time": "最大回撤时间", "max_trade_lose": "单笔最大亏损", "max_trade_win": "单笔最大盈利", "trade_days": "交易天数", "trade_times": "交易次数",
+    "equity_curve_intercept": "权益曲线拟合截距", "equity_curve_r2": "权益曲线拟合优度", "equity_curve_slope": "权益曲线拟合斜率",
+    "max_asset_premium": "最大权益上涨金额", "max_asset_premium_time": "最大权益上涨时间", "max_daily_drawdown_ratio": "最大单日回撤比例", "max_drawdown_time": "最大回撤时间",
+    "avg_cost": "平均手续费", "avg_max_float_lost": "平均最大浮亏", "avg_max_float_profit": "平均最大浮盈", "avg_net_profit": "平均净利润", "avg_profit_ratio": "平均收益率",
+    "month": "月份", "sample_count": "样本数", "year": "年份", "ym": "年月", "max_float_lost": "最大浮亏", "max_float_profit": "最大浮盈",
+    "buy_price": "多头持仓价格", "sell_price": "空头持仓价格", "today_buy": "今日多头手数", "today_sell": "今日空头手数", "total_buy": "多头总手数", "total_sell": "空头总手数",
+    "best_close_price": "最佳平仓价格", "best_close_time": "最佳平仓时间", "close_bar": "平仓柱序号", "close_price": "平仓价格", "close_ratio": "平仓评价指标", "close_time": "平仓时间",
+    "contract": "合约", "float_loss": "浮动亏损", "float_profit": "浮动盈利", "formula": "策略", "id": "序号", "long": "交易方向",
+    "open_bar": "开仓柱序号", "open_price": "开仓价格", "open_ratio": "开仓评价指标", "open_time": "开仓时间", "title": "名称",
+    "total_profit_ratio": "累计收益指标", "total_ratio": "综合评价指标", "volume": "手数", "worst_close_price": "最差平仓价格", "worst_close_time": "最差平仓时间",
+    "avg_win_lose_ratio": "平均盈亏比", "max_lose_ratio": "最大亏损比例", "max_win_ratio": "最大盈利比例", "net_profit_max_lose_ratio": "净利润与最大单笔亏损之比",
+    "avg_float_pnl": "平均浮动盈亏", "max_consecutive_pnl": "最大连续盈亏", "max_consecutive_ratio": "最大连续盈亏比例", "max_float_pnl": "最大浮动盈亏",
+    "max_float_time": "最大浮动盈亏时间", "max_trade_pnl": "单笔最大盈亏", "max_trade_pnl_ratio": "单笔最大盈亏比例",
+    "point_count": "返回点数", "sampled": "是否抽样", "source_record_count": "原始记录数", "stride": "采样步长",
+    "time": "时间", "bar_id": "柱序号", "static_equity": "已实现权益", "dynamic_equity": "含浮盈权益", "long_margin": "多头保证金", "short_margin": "空头保证金", "total_return": "累计收益指标",
+    "close_at_end": "期末是否平仓", "cost_source": "费率来源", "headless_report_available": "资金曲线是否可用", "headless_report_schema": "报告格式版本",
+    "equity_curve": "资金曲线", "equity_curve_meta": "资金曲线采样信息", "monthly": "月度统计", "open_positions": "期末持仓", "statistics": "统计明细", "trade_pairs": "成交明细", "trade_parse": "交易分析", "year_month": "年月统计", "yearly": "年度统计"
+  },
+  "parameters": {
+    "BandPeriod": "布林带周期", "StdDevK": "标准差倍数", "Lots": "每次交易手数", "StopPoints": "止损跳数", "StopPoint": "止损点数",
+    "Fast": "短周期", "Slow": "长周期", "FastPeriod": "短周期", "SlowPeriod": "长周期", "ShortPeriod": "短周期", "LongPeriod": "长周期",
+    "ShortMA": "短期均线周期", "MidMA": "中期均线周期", "LongMA": "长期均线周期", "TrendPeriod": "趋势周期", "EMAPeriod": "指数均线周期",
+    "ChannelPeriod": "通道周期", "BreakoutPeriod": "突破观察周期", "DayMAPeriod": "日线均线周期", "RangePeriod": "区间观察周期", "RangeThreshold": "区间波动阈值",
+    "TradeEnable": "交易开关", "SoundAlert": "语音提醒开关", "MaxLossPerTrade": "单笔最大亏损金额", "AlertSwitch": "提醒开关", "SqueezeRatio": "均线粘合阈值"
+  },
+  "text": {
+    "statistics.max_drawdown": "最大回撤（含浮盈）", "equity_curve_meta": "资金曲线采样信息", "static_equity": "已实现权益", "dynamic_equity": "含浮盈权益",
+    "qdc_default": "合约默认费率", "actual_bars": "区间内实际行情", "mutable_right_edge=true": "末根行情仍可变化", "--params": "临时参数覆盖", "stride": "采样步长", "sampled": "是否抽样",
+    "CurrentBuyContracts()": "当前多仓手数", "CurrentSellContracts()": "当前空仓手数", "CurrentContracts()": "当前总持仓手数",
+    "Close[1]": "上一根收盘价", "UpBand[1]": "上一根上轨", "LoBand[1]": "上一根下轨", "MidBand[1]": "上一根中轨",
+    "BuyToCover": "平空", "SellShort": "开空", "SetStopPoint": "设置止损", "SetWinPoint": "设置止盈", "StandardDev": "标准差", "CrossOver": "向上交叉", "CrossUnder": "向下交叉",
+    "PlotNumeric": "指标线", "PlotText": "文字标记", "PlotIcon": "图标标记", "TickPrice": "最小变动价位", "nPriceType": "价格类型", "nAddTick": "超价跳数",
+    "UpBand": "上轨", "LoBand": "下轨", "MidBand": "中轨", "Close": "收盘价", "Open": "开盘价", "High": "最高价", "Low": "最低价", "Buy": "开多", "Sell": "平多", "MA": "均线", "true": "是", "false": "否"
+  },
+  "percent_fields": ["win_rate", "profit_ratio", "annual_profit_ratio", "hold_time_ratio", "max_drawdown_prior_high_ratio", "max_premium_prior_low_ratio", "max_daily_drawdown_ratio", "avg_profit_ratio"],
+  "integer_fields": ["trades", "id", "bar_id", "open_bar", "close_bar", "year", "month", "ym", "volume", "trade_lots", "win_lots", "lose_lots", "even_lots", "all_times", "all_trade", "win_times", "win_trade", "lose_times", "lose_trade", "event_times", "event_trade", "trade_days", "trade_times", "sample_count", "point_count", "source_record_count", "stride", "max_empty_days", "consecutive_lose", "consecutive_win", "max_consecutive_lose", "max_consecutive_win", "total_hold_period", "total_trade_time", "avg_hold_period", "avg_even_period", "avg_win_period", "avg_lose_period", "today_buy", "today_sell", "total_buy", "total_sell"]
+}

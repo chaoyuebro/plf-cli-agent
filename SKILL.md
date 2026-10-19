@@ -1,6 +1,6 @@
 ---
 name: plf-cli-agent
-description: 用于盘立方指标编辑器公式的生成、修改、编译、错误修复与策略回测。使用前必须打开盘立方客户端，首次使用时需提供盘立方安装目录。支持按指定合约、周期、时间区间和单组参数运行回测，分析收益、回撤、胜率等指标，并在用户要求时逐轮调参。
+description: 用于盘立方历史 K 线取数，以及指标编辑器公式的生成、修改、编译、错误修复与策略回测。使用前必须打开盘立方客户端，首次使用时需提供盘立方安装目录。支持按指定合约、周期、时间区间和单组参数运行回测，分析收益、回撤、胜率等指标，并在用户要求时逐轮调参。
 ---
 
 # 盘立方公式生成与编译调试
@@ -17,6 +17,11 @@ description: 用于盘立方指标编辑器公式的生成、修改、编译、�
 `executor-start` / `executor-status` / `executor-stop` / `executor-remove`。它是 EJClient 内的后台策略计算，
 **不是** `run` 回测，也不产生可替代完整回测报告的结果。只在用户明确要求后台执行、管理或查询时进入，
 先按[后台执行器](references/executor.md)完成双端能力检查；不支持时停止，不把 `run` 当作替代。
+
+另有独立的历史 K 线取数入口：用户要求按合约、周期和交易日期区间获取历史行情时，调用
+`plf-cli history`，一次获得完整 JSON 明细。它不需要公式、编译器或回测引擎；取数请求本身
+不授权生成公式、回测或调参。执行前仍确认安装目录与客户端身份，并按
+[历史 K 线取数](references/cli-commands.md#历史-k-线取数)检查双端能力、读取字段和处理清理结果。
 
 只有用户要求回测或调参时才进入第二个闭环。每次回测只允许一个明确的参数对象；禁止调用
 `optimize`、`--grid`，禁止一次生成参数组合笛卡尔积。
@@ -49,14 +54,21 @@ description: 用于盘立方指标编辑器公式的生成、修改、编译、�
 
 ## 输出形式
 
-- 除非用户明确要求图片或可视化，否则不得调用绘图、配图、图像生成、画布或可视化工具，也不得额外制作流程图、架构图或演示示意图。
+- 报告只保存在当前执行的 Skill 副本的 `usr\work-reports\backtests\` 中，不在项目、工作区或其他 Skill 副本中创建第二份。不再询问该选择；只有用户主动另改保存位置或明确要求备份时才调整。调用报告脚本时省略基础目录参数即可使用本副本私有目录，路径不随当前工作区变化。
+- 每轮成功回测默认生成正式 HTML 报告，**每个对话窗口独立维护一个合集**，即使多个窗口使用同一个工作区也不合并。同一窗口后续回测持续追加到本窗口入口，使用宿主稳定对话标识；切换周期（如 5m 改为 15m）、合约、策略或开始新的优化批次，仍使用原 `window_id` 和总览目录，禁止为这些变化另起窗口标识或创建新的窗口目录；没有宿主标识时在本对话首次生成并固定一个 UUID，不能按工具调用、日期、进程或工作区重新生成或复用。脚本在报告基础目录下自动隔离到 `windows\<窗口键>\index.html`，最终交付返回的本窗口总览入口和本次各份报告的独立链接，不再交付工作区公共索引。总览每项仅按“策略 + 合约 + 周期 + 测试时间 + 版本”显示为可点击的简洁列表，测试时间取实际运行时间；参数、回测区间、轮次、收益、回撤等详情点击后再展示，不在总览铺开表格。保留搜索、策略/合约/周期筛选和按时间倒序查看。每份报告默认包含真实已实现权益资金曲线；数据不可用时明确说明原因，不补造曲线或为补图重跑回测。具体数据约定和脚本调用见 [默认报告归档](references/cli-commands.md#默认报告归档与规则前置)。这项默认归档不代表授权新增回测或调参。
+- 每份回测报告在标题和回测对象之后，**先列清楚本次实际执行的策略规则**，再列本轮参数、运行口径和结果。规则必须来自当前已编译公式，区分开多、开空、平多、平空、风控仓位和信号执行条件；未设置的规则如实标注，不靠策略名称推测。源码默认值与本轮覆盖值分开显示。
+- 总览标题和打开后的报告标题统一加轮次后缀：`策略名（基准轮）`、`策略名（优化第一轮）`、`策略名（优化第二轮）`，用户要求自行修改策略或参数后回测则用 `策略名（修改第一轮）` 等。依据用户任务性质填写 `round_label`，优化与修改分别计轮，不按收益、列表顺序或源码摘要猜测。仅改展示标题，不为后缀改公式简称、源码、默认参数或重新编译。
+- 资金曲线下方保留全部报告明细，不附文字解读或说明段落。必要的单位和抽样提示放在曲线上方；收益、统计、成交、月度年度、期末持仓及采样信息等明细使用中文表格展示，原始数据仍保留在正式归档 JSON 中。
+- 报告、总览和聊天摘要中的小数统一保留两位；胜率按百分比显示两位（如 `34.09%`），交易次数等计数保留整数。只格式化展示，不对归档原始数据、参数、曲线计算或参数排名取整。参数、统计字段和规则说明使用中文；根据源码注释与实际含义提供 `parameter_labels`，不直接展示英文键或原始 JSON。
+- 分析正文 `analysis`、每条 `warnings` 和各轮优化对比都必须由 Agent 写成完整中文；字段词典替换不是整段翻译。归档前若返回 `REPORT_CHINESE_REQUIRED`，在当前内存里翻译正文与提示后仅重试本地归档，不重跑回测、不隐藏或删去分析来绕过校验。修复已归档报告仅允许按命令参考的展示修正方式更新轮次、分析和提示，不改真实数据。
+- 除默认回测报告内的真实资金曲线外，用户没有明确要求时不得调用配图、图像生成、画布或可视化工具，也不得额外制作流程图、架构图或演示示意图。
 - 用户要求“资金曲线”“权益曲线”或“画出回测曲线”时，读取并严格执行
   [CLI 命令参考的资金曲线绘图](references/cli-commands.md#资金曲线绘图)：使用真实 `equity_curve`、
   默认绘制 `static_equity`、采用不越界的 Fritsch–Carlson 平滑，并在交付前运行
   `scripts/verify_render.js` 真机验证。图表实现细节不在入口重复维护。
-- **图表/报告交付给用户的固定形式是「正文里的 md 锚文本链接」**：调 `present_files` 后取返回值里的
+- **资金曲线交付给用户的固定形式是「正文里的 md 锚文本链接」**：调 `present_files` 后取返回值里的
   `previewed` 字段（那就是客户端给预览用的 http 地址），正文写成
-  `[白糖指数资金曲线](<previewed url>)`，再附一行本地路径作离线保底。
+  `[白糖指数资金曲线](<previewed url>)`；本地路径仅在用户询问离线副本时给出。
   **锚文本 = `<品种><合约>资金曲线`，一律写全**：品种用中文名（与用户原话一致，
   如 `白糖` / `铸造铝合金`），合约用盘立方口径的合约标识（`指数` / `主连` / 具体月份如 `2501`），
   末尾固定拼 `资金曲线`。
@@ -74,10 +86,11 @@ description: 用于盘立方指标编辑器公式的生成、修改、编译、�
   不得只给文件名、裸路径或裸地址；
   不要用文件卡片代替链接，也不要为了“能点”自己起 `http.server`。完整口径见
   [CLI 命令参考的资金曲线绘图](references/cli-commands.md#资金曲线绘图)。
-- **交付正文只写两行**：① `<品种><合约>资金曲线已生成。`——完整名称写在这句**普通文本**里，
+- **资金曲线交付正文保留两行**：① `<品种><合约>资金曲线已生成。`——完整名称写在这句**普通文本**里，
   这样即使链接卡片把锚文本裁短，用户也一定看得到完整名字；② 那行锚文本链接（独占一段）。
   不要口径说明、参数复现、数字表格、下一步建议、临时地址失效提醒；采样与回撤口径等细节
   写进图内或报告内，等用户追问再说（2026-09-23 叶生：「这两句话就行，其他的解释不要」）。
+- 本次产生回测报告时，最终回复另给固定名称的 `[回测报告总览](<previewed url>)` 链接；入口链接文字、页面主标题和浏览器标题固定为“回测报告总览”，不添加“15分钟”等具体周期前缀或后缀，因为同一合集可包含多个周期；交付顺序固定为先列本次各份独立报告链接，最后单独显示“回测报告总览”链接。逐份显示本次生成的独立报告链接，名称使用“策略名 · 合约 · 周期 · 轮次”，例如 `[布林带突破ATR策略 · 螺纹指数 · 15分钟 · 优化第一轮](<单份报告 previewed url>)`；多轮任务列出本次全部轮次，不只给总览。对每份 HTML 分别调用 `present_files`，使用各自实际返回的地址，不能从总览预览地址拼接相对链接。未请求曲线时，简述本轮结论并给总览及独立报告链接即可。总览使用自身内联的报告详情，不依赖临时预览地址或同目录文件能否被预览服务访问。没有 `present_files` 的宿主使用可点击的本地 HTML 链接，不自行启动 HTTP 服务。
 - `.fml` 工作源码和注册产物仍须实际生成，CLI 结果仍须完整核验，但最终回复不打印“编译结果核验（全部通过）”清单，也不列工作源码路径、发布路径、DLL 路径、SHA256 等交付物明细。
 - 默认不得在最终回复中附加、链接、渲染或以文件卡片展示 `.fml` 源码。只有用户明确要求
   “查看源码”“打开文件”或“下载公式”时才显示对应文件；创建和编译公式本身不构成展示授权。
@@ -119,7 +132,7 @@ Skill 自身移动无需改路径；禁止在其他文件重复填写绝对路�
     ├── _user_meta.json   平台导入时写入的安装元数据
     ├── root.local.json   已确认的盘立方安装目录
     ├── work-formulas\    本副本生成过的公式
-    └── work-reports\     用户明确要求保留的资金曲线与正式报告
+    └── work-reports\     默认回测报告库及用户要求的资金曲线
 ```
 
 `usr\` 由 `scripts\plf-root.ps1` 按需创建，不需要手工建目录。`paths.ps1` 必须留在根目录：
@@ -172,17 +185,20 @@ $RootReady == true
 全部隔离在各自的 `usr\` 目录里，同步副本时禁止覆盖或搬运任何副本的
 `paths.ps1` `$FallbackRoot` 与 `usr\`。
 
-**本机已知的 `plf-cli-agent` 副本（共 4 份，改动必须全部同步）：**
+**本机已知的 `plf-cli-agent` 副本（2026-10-19 扫描确认 5 份，改动必须全部同步）：**
 
 ```text
-用户级（Skill 真正的发现路径）
-  C:\Users\Mayn\.workbuddy\skills\plf-cli-agent
+技能管理器副本
+  C:\Users\Mayn\.skills-manager\skills\plf-cli-agent
+
+用户级（平台导入目录带后缀，Skill 名仍为 plf-cli-agent）
+  C:\Users\Mayn\.workbuddy\skills\plf-cli-agent__skillhub
 
 项目主副本
-  D:\BaiduSyncdisk\MFC\pcclient\.codex\skills\plf-cli-agent
+  D:\MFC\pcclient\.codex\skills\plf-cli-agent
 
 项目 Release 副本
-  D:\BaiduSyncdisk\MFC\pcclient\Release\Skills\plf-cli-agent
+  D:\MFC\pcclient\Release\Skills\plf-cli-agent
 
 独立发布测试副本
   D:\Release\Skills\plf-cli-agent
@@ -197,9 +213,9 @@ $RootReady == true
 2026-09-23 实测：用户级 Skill 由 `plf-cli-agent-demo` 迁移重建为 `plf-cli-agent`，
 原 `usr\work-formulas\TurtleSystem.fml` 与整个 `usr\work-reports\` 全部丢失，
 `usr\root.local.json` 也一并消失（需重新确认安装目录）。`modify_backup` 里的同名副本是 0 字节，不能当备份用。
-因此：**用户明确要求保留的资金曲线 / 正式报告，除按约定写入 `usr\work-reports\` 外，
-必须同时另存一份到工作区或用户指定目录**（例如 `<工作区>\reports\`），
-最终回复给用户的是工作区那一份；`usr\` 里的只作为本副本的工作副本。
+因此：报告与资金曲线保存在用户确认的位置。用户选择仅使用 `usr\work-reports\` 时沿用该选择；
+只有用户明确要求额外备份时，才另存到其指定目录，不能因平台迁移风险自动向工作区写入第二份。
+最终交付用户确认目录中的文件，不另行创建工作区报告副本。
 
 资金曲线算法**只在本 Skill 内定义**，不依赖任何外部配套 Skill。`SKILL.md`
 「输出形式」的资金曲线条目与 `references/cli-commands.md#资金曲线绘图` 必须保持同一口径；
@@ -215,14 +231,14 @@ $RootReady == true
   真实源码骨架取 [策略案例库](references/examples-strategies.md) 与
   [指标案例库](references/examples-indicators.md)，这两个案例库同属 Skill 内置内容。
 - 只允许读取本 Skill（包括别名种子表）、用户明确点名或附加的单个 `.fml`、当前工作公式，
-  以及 CLI 返回的 JSON。标的解析不得读取安装目录中的 `all_contract.dat`、`hot_contract_list.dat`。
-- 只允许写入 `usr\work-formulas\<英文简称>.fml`、用户明确要求的 `usr\work-reports\` 图表/报告、`usr\instrument-catalog.json`、`usr\root.local.json`（只能通过 `scripts\plf-root.ps1` 写入）和本次临时 JSON；不得直接编辑 CLI 发布到 EJClient 安装目录的文件。`usr\_user_meta.json` 由平台维护，任何情况下都不得读取、创建、修改或删除。
-- 每次使用完毕后立即删除本轮产生的所有中间文件，包括 `--out` JSON、`scripts\plf-root.ps1 -OutFile` 产生的 JSON、显示名辅助文本、探测脚本及 `_plf_*`/`_probe*` 文件；成功与失败路径都不能遗留。本机 `Remove-Item` 会被 safe-delete 包装器拦截并抛出 `trash-failed / Some operations were aborted`，多路径数组写法还会静默失效，因此清理已确认属于本轮的文件必须使用 `[System.IO.File]::Delete()` 逐个删除并复验剩余为 0。工作公式、CLI 发布的公式源码、DLL、`usr\` 内的正式产物（`_user_meta.json`、`root.local.json`、`instrument-catalog.json`）和 Skill 正式说明文件是正式产物，不属于中间文件，不得删除。
+  CLI 返回的 JSON，以及本 Skill 正式报告库自身的 `report-library.json`、报告与索引。标的解析不得读取安装目录中的 `all_contract.dat`、`hot_contract_list.dat`。
+- 只允许写入 `usr\work-formulas\<英文简称>.fml`、用户确认使用的 `usr\work-reports\` 报告库或用户指定报告目录、`usr\instrument-catalog.json`、`usr\root.local.json`（只能通过 `scripts\plf-root.ps1` 写入）、用户明确要求保存的历史 K 线 JSON 和本次临时 JSON；不自动写入工作区报告目录，不得直接编辑 CLI 发布到 EJClient 安装目录的文件。`usr\_user_meta.json` 由平台维护，任何情况下都不得读取、创建、修改或删除。
+- 每次使用完毕后立即删除本轮产生的所有中间文件，包括 `--out` JSON、报告归档的临时输入 JSON、`scripts\plf-root.ps1 -OutFile` 产生的 JSON、显示名辅助文本、探测脚本及 `_plf_*`/`_probe*` 文件；成功与失败路径都不能遗留。本机 `Remove-Item` 会被 safe-delete 包装器拦截并抛出 `trash-failed / Some operations were aborted`，多路径数组写法还会静默失效，因此清理已确认属于本轮的文件必须使用 `[System.IO.File]::Delete()` 逐个删除并复验剩余为 0。工作公式、CLI 发布的公式源码、DLL、`usr\` 内的正式产物（`_user_meta.json`、`root.local.json`、`instrument-catalog.json`）、正式报告库（HTML 报告、归档 JSON、`report-library.json` 与 `index.html`）、用户明确要求保存的历史 K 线 JSON 和 Skill 正式说明文件不属于中间文件，不得删除。
 
 ## 前置条件与编译门禁
 
 - 用户必须预先启动 `EJClient.exe`，且该客户端所在目录必须等于已确认的安装目录 `$Root`。本地公式编译不要求 QDC 连接或完整回测能力，但编译后的运行时注册及其他业务 IPC 要求当前账号具有有效的 CLI 功能授权。
-- 全程使用 PowerShell 参数数组调用固定 CLI，不使用 Bash。每次 `status`、`doctor`、`instrument-list`、`compile`、`run` 和受支持的 `executor-*` 调用都必须在子命令之后插入 `$RootArgs`（`--root <安装目录>`），并为每次调用指定全新的 `--out` JSON 路径；CLI 调用后不得附加 `| Out-Null` 或其他管道。本机管道会使 `$LASTEXITCODE` 出现错误值，因此成败只按 UTF-8 读取后的 JSON `success`、`exit_code` 和结构化字段判断，不记录或交叉校验 `$LASTEXITCODE`。标准输出为空时不能据此判定成功或失败。中文 `--display-name` 必须存入变量后作为独立数组元素传递，禁止拼接整条命令字符串。`doctor` 的 JSON `exit_code` 为 11 或 31 时仍须读取 `data.ready_for_compile`，不能因完整运行能力未就绪而停止编译；执行回测前则必须确认 `data.ready_for_backtest == true`。后台执行器另按[后台执行器](references/executor.md)核验能力和运行条件，不用回测就绪字段替代。
+- 全程使用 PowerShell 参数数组调用固定 CLI，不使用 Bash。每次 `status`、`doctor`、`instrument-list`、`history`、`compile`、`run` 和受支持的 `executor-*` 调用都必须在子命令之后插入 `$RootArgs`（`--root <安装目录>`），并为每次调用指定全新的 `--out` JSON 路径；CLI 调用后不得附加 `| Out-Null` 或其他管道。本机管道会使 `$LASTEXITCODE` 出现错误值，因此成败只按 UTF-8 读取后的 JSON `success`、`exit_code` 和结构化字段判断，不记录或交叉校验 `$LASTEXITCODE`。标准输出为空时不能据此判定成功或失败。中文 `--display-name` 必须存入变量后作为独立数组元素传递，禁止拼接整条命令字符串。`doctor` 的 JSON `exit_code` 为 11 或 31 时仍须读取 `data.ready_for_compile`，不能因完整运行能力未就绪而停止编译；执行回测前则必须确认 `data.ready_for_backtest == true`。后台执行器另按[后台执行器](references/executor.md)核验能力和运行条件，不用回测就绪字段替代。
 - **把「调 CLI」和「解析响应」拆成两次调用**：不要把 `run`/`compile` 之后的 JSON 解析写进同一条内联
   PowerShell 命令。2026-09-23 实测：超长的内联脚本会整段失败（退出码 1、且无任何标准输出），
   失败后也看不出 CLI 究竟有没有执行，容易误判成“需要重新提交”。正确顺序：① 一条命令只做点调用 +
@@ -238,7 +254,7 @@ $RootReady == true
   上游 `try` 块里、被 `catch` 吞掉后 `--pid` 取值落空，CLI 便拿**当前 PowerShell 进程**当身份去连管道，
   返回 `PIPE_IDENTITY_FAILED`（退出码 70）——**看起来像客户端不匹配，实际是脚本自己把 PID 弄丢了**。
   ⇒ 承接 `selected_pid` 一律用 `$ClientPid` 这类自定义变量名，并在 `run` 前把实际使用的 PID 写进摘要自检。
-- **回测相关命令的 `--timeout` 上限是 600 秒**：`run`/`history-submit`/`backtest-submit`/`job-wait`
+- **回测及历史取数命令的 `--timeout` 上限是 600 秒**：`history`/`run`/`history-submit`/`backtest-submit`/`job-wait`
   接受 1～600 秒，CLI 不传参数时仍默认 300 秒。本 Skill 的 `run` 显式传 `--timeout 600`，
   用户明确指定更短时使用用户值。取数、排队和回测共享预算，编译及终态清理不计入。
   后台执行器的等待规则不变：默认 60 秒，上限 300 秒，见 [后台执行器](references/executor.md)。
@@ -253,7 +269,7 @@ $RootReady == true
   定位手法：把该次 CLI 调用改成 `$cap = & $Cli @A 2>&1`（重定向、不加管道符）再落盘查看 stdout，
   一次就能看到 `error.code`，不要仅凭输出文件缺失判断管道故障。
 - 日志与作业类命令不止 `status`/`doctor`/`compile`/`run`：`help` 还列出
-  `instrument-list`、`history-submit`（纯取数，排查「有数据但取不到」最快）、`backtest-submit`、
+  `instrument-list`、`history`（纯取数，直接返回逐根 K 线 JSON）、`backtest-submit`、
   `job-status`/`job-wait`/`job-cancel`/`job-delete`、`report-export --input <report.json>
   --output <x.csv|x.html|x.json> [--section summary|equity|trades]`、`executor-*`。
   **注意 `--period` 的取值范围是 `1m|3m|1d|1w|1mo|Nm(N=5..1440,step=5)|Nh(N=1..24)`。**
@@ -405,7 +421,7 @@ ASCII 空格，例如 `ZCE AP IDX`、`ZCE AP MI`、`ZCE AP 610`、`DCE LG 2611`�
    `mutable_right_edge == true` 表示请求触及当前尾部，最后一根 K 线可以仍在变化，且不复用不可变快照；
    是否取数成功仍依据任务终态，不能仅凭此字段判定成功或失败。
 2. 每轮必须等待 `run` 返回完整终态，读取 `data.response.data.backtest.report` 后再分析；不得在上一轮未结束时提交下一轮。报告中 `headless_report_available == true` 时，资金曲线固定读取 `report.equity_curve`，采样信息读取 `report.equity_curve_meta`；为 `false` 时记录 `headless_report_error`，不得根据成交对、净利润或首尾权益伪造资金曲线。
-3. 每轮响应 JSON **只允许读取和解析一次**。解析后立即在当前任务上下文中保存一条紧凑的轮次记录：轮次、实际参数、净利润、最大回撤、交易次数、胜率、盈亏比、权益曲线评价和停止原因候选；随后删除该轮 `--out` JSON。禁止为了“提取关键指标”“提取统计指标”或撰写总结而再次读取同一个 JSON，也禁止另建 `_rr.txt` 等会被覆盖的单轮摘要文件作为历史数据源。
+3. 每轮响应 JSON **只允许读取和解析一次**。解析后立即在当前任务上下文中保存一条紧凑的轮次记录：轮次、实际参数、净利润、最大回撤、交易次数、胜率、盈亏比、权益曲线评价和停止原因候选；从同一内存对象生成本轮正式报告并更新总览，然后删除该轮 `--out` JSON 和归档临时输入。归档失败只修复本地报告，不重跑回测。禁止为了“提取关键指标”“提取统计指标”或撰写总结而再次读取同一个 JSON，也禁止另建 `_rr.txt` 等会被覆盖的单轮摘要文件作为历史数据源。
 4. 分析至少使用净利润、最大回撤、交易次数、胜率、盈亏比和权益曲线。默认资金曲线以 `static_equity` 为主要序列，用于评价已实现资金变化；`dynamic_equity`、可用资金、保证金和成本用于解释持仓期间浮动盈亏与资金占用，不得把两种口径混写成同一条曲线的结论。结合 `equity_curve_meta.sampled/stride/source_record_count` 判断曲线是否经过抽样。评价至少关注总体方向、峰谷回撤、长时间停滞和尾段稳定性，不得只比较首尾两个点。先检查交易数是否足够，再比较收益，不能只按净利润选择参数。若曲线不可用，明确把该轮标记为“资金曲线不可用”，仍可分析其他真实报告字段，但不得给出曲线形态结论。
 5. Agent 每次只能根据已保存的轮次记录给出**下一组**参数和修改理由，然后再次调用一次 `run --params`。一组可同时包含多个字段，例如 `M=10,N=20,StopPoint=30`；这些字段共同构成一次回测，不得展开为多组组合。
 6. 禁止调用 `optimize`、`--grid`、并行提交或自行生成笛卡尔积。CLI 对 `optimize` 返回 `OPTIMIZE_NOT_EXPOSED`。
@@ -449,7 +465,7 @@ ASCII 空格，例如 `ZCE AP IDX`、`ZCE AP MI`、`ZCE AP 610`、`DCE LG 2611`�
 - 只覆盖开仓或平仓一侧时，未指定的一侧继续使用合约默认费率。只设滑点时不需要 `--fee-mode`。
 - 传入成本选项前确认 `status.data.status.task_cost_overrides_implemented == true`。必须从终态回显的 `cost_source/cost_overrides` 判定是否生效，不得只根据利润差猜测。
 
-对用户的阶段回报保持简洁：直接说明关键指标变化和下一轮调整理由，不单独报告基准轮完成状态，也不强调未传参数；只有参数覆盖实际影响分析时才提本轮参数。用户要求完整报告时再输出或导出完整报告。
+对用户的阶段回报保持简洁：直接说明关键指标变化和下一轮调整理由，不单独报告基准轮完成状态，也不强调未传参数；只有参数覆盖实际影响分析时才提本轮参数。完整报告默认归档到 HTML 报告库；聊天中给关键结论、总览链接和本次各份独立报告链接，用户要求时再展开详细报告。
 用户要求资金曲线时，先用当前内存中的 `equity_curve` 按 DlgBP 口径生成以记录顺序为横轴、资金为纵轴的实际曲线图并展示，时间只作刻度标签，不能只输出点列表或文字总结。用户另外要求资金曲线数据或 CSV 时，在删除本轮临时响应 JSON 前调用
 `plf-cli report-export --input <本轮响应.json> --output <新文件.csv> --section equity`
 导出正式 CSV。该子命令不连接 EJClient，**不得附加 `--out`、`--root` 或 `--pid`**；当前实现中
