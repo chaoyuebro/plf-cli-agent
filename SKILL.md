@@ -19,8 +19,9 @@ description: 用于盘立方历史 K 线取数，以及指标编辑器公式的�
 先按[后台执行器](references/executor.md)完成双端能力检查；不支持时停止，不把 `run` 当作替代。
 
 另有独立的历史 K 线取数入口：用户要求按合约、周期和交易日期区间获取历史行情时，调用
-`plf-cli history`，一次获得完整 JSON 明细。它不需要公式、编译器或回测引擎；取数请求本身
-不授权生成公式、回测或调参。执行前仍确认安装目录与客户端身份，并按
+`plf-cli history`，默认不传 `--out`，在同一次调用中捕获标准输出并解析为内存对象。
+只有用户明确要求保存 JSON 文件时才传 `--out`；默认不重定向输出或另存历史响应文件。
+它不需要公式、编译器或回测引擎；取数请求本身不授权生成公式、回测或调参。执行前仍确认安装目录与客户端身份，并按
 [历史 K 线取数](references/cli-commands.md#历史-k-线取数)检查双端能力、读取字段和处理清理结果。
 
 只有用户要求回测或调参时才进入第二个闭环。每次回测只允许一个明确的参数对象；禁止调用
@@ -230,8 +231,8 @@ $RootReady == true
 ## 前置条件与编译门禁
 
 - 用户必须预先启动 `EJClient.exe`，且该客户端所在目录必须等于已确认的安装目录 `$Root`。本地公式编译不要求 QDC 连接或完整回测能力，但编译后的运行时注册及其他业务 IPC 要求当前账号具有有效的 CLI 功能授权。
-- 全程使用 PowerShell 参数数组调用固定 CLI，不使用 Bash。每次 `status`、`doctor`、`instrument-list`、`history`、`compile`、`run` 和受支持的 `executor-*` 调用都必须在子命令之后插入 `$RootArgs`（`--root <安装目录>`），并为每次调用指定全新的 `--out` JSON 路径；CLI 调用后不得附加 `| Out-Null` 或其他管道。本机管道会使 `$LASTEXITCODE` 出现错误值，因此成败只按 UTF-8 读取后的 JSON `success`、`exit_code` 和结构化字段判断，不记录或交叉校验 `$LASTEXITCODE`。标准输出为空时不能据此判定成功或失败。中文 `--display-name` 必须存入变量后作为独立数组元素传递，禁止拼接整条命令字符串。`doctor` 的 JSON `exit_code` 为 11 或 31 时仍须读取 `data.ready_for_compile`，不能因完整运行能力未就绪而停止编译；执行回测前则必须确认 `data.ready_for_backtest == true`。后台执行器另按[后台执行器](references/executor.md)核验能力和运行条件，不用回测就绪字段替代。
-- **把「调 CLI」和「解析响应」拆成两次调用**：不要把 `run`/`compile` 之后的 JSON 解析写进同一条内联
+- 全程使用 PowerShell 参数数组调用固定 CLI，不使用 Bash。每次 `status`、`doctor`、`instrument-list`、`history`、`compile`、`run` 和受支持的 `executor-*` 调用都必须在子命令之后插入 `$RootArgs`（`--root <安装目录>`），其中 `history` 默认不传 `--out`，直接捕获并解析标准输出；其余上述命令每次指定全新的 `--out` JSON 路径。`history` 仅在用户明确要求保存 JSON 时使用 `--out`，不因输出为空或解析失败自动改为落盘重试；CLI 调用后不得附加 `| Out-Null` 或其他管道。本机管道会使 `$LASTEXITCODE` 出现错误值，因此成败只按 UTF-8 读取后的 JSON `success`、`exit_code` 和结构化字段判断，不记录或交叉校验 `$LASTEXITCODE`。其他命令的标准输出为空时不能据此判定成功或失败。中文 `--display-name` 必须存入变量后作为独立数组元素传递，禁止拼接整条命令字符串。`doctor` 的 JSON `exit_code` 为 11 或 31 时仍须读取 `data.ready_for_compile`，不能因完整运行能力未就绪而停止编译；执行回测前则必须确认 `data.ready_for_backtest == true`。后台执行器另按[后台执行器](references/executor.md)核验能力和运行条件，不用回测就绪字段替代。
+- **run/compile 的「调 CLI」和「解析响应」拆成两次调用**：不要把 `run`/`compile` 之后的 JSON 解析写进同一条内联
   PowerShell 命令。2026-09-23 实测：超长的内联脚本会整段失败（退出码 1、且无任何标准输出），
   失败后也看不出 CLI 究竟有没有执行，容易误判成“需要重新提交”。正确顺序：① 一条命令只做点调用 +
   调 CLI，把 `--out` JSON 留在临时目录；② 另写一个独立 `.ps1`（放 `%TEMP%`，执行后删除）解析该 JSON、

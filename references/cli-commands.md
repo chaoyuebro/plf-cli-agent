@@ -11,7 +11,6 @@ plf-cli instrument-list [--root <install-root>] [--pid <pid>] [--out <new-output
 plf-cli history --contract <contract> --period <规范分钟周期|1d|1w|1mo>
     --start <yyyymmdd> --end <yyyymmdd>
     [--timeout <1..600>] [--root <install-root>] [--pid <pid>]
-    [--out <new-output.json>]
 plf-cli compile --source <source.fml> --name <internal-name>
     --display-name <display-name>
     [--source-encoding utf8|cp936]
@@ -46,8 +45,10 @@ plf-cli run --source <source.fml> --name <internal-name>
 
 ## 历史 K 线取数
 
-用户要求历史 K 线数据时只调用 `history`，不生成或编译公式，不调用 `run`、
+用户要求历史 K 线数据时只调用 `history`，默认不传 `--out`，直接读取标准输出 JSON。
+同一次调用内捕获并解析完整响应，不先写响应文件；不生成或编译公式，不调用 `run`、
 `history-submit`、`backtest-submit` 或 `job-wait` 来拼装替代流程。
+只有用户明确要求保存 JSON 文件时才额外传 `--out <新文件.json>`。
 
 1. 读取 `version`，确认 CLI 顶层 `data.history_data_implemented == true`；再读取 `status`，
    确认服务端 `data.status.history_data_implemented == true`、`data_adapter_ready == true`，且
@@ -55,15 +56,41 @@ plf-cli run --source <source.fml> --name <internal-name>
    `status` 退出 31 或 `ready == false` 可能只是公式引擎未就绪，不阻止数据能力已就绪的取数。
    不用 `doctor.ready_for_backtest` 作为历史取数门禁。
 2. 使用既有标的解析流程取得合约 key，明确周期及起止交易日期；持续携带已确认的 `$RootArgs`、
-   同一个 `$ClientPid` 和全新的 `--out` 路径。超时默认 300 秒，显式值范围 1～600 秒。
+   同一个 `$ClientPid`；默认省略 `--out`。超时默认 300 秒，显式值范围 1～600 秒。
 3. CLI 自动提交纯取数作业、等待 `data_ready`、每页读取最多 5000 根并汇总完整 JSON。
    取数、等待和分页共享超时预算；终态清理不计入。最终输出不受单次 IPC 32 MB 限制。
-4. 按 UTF-8 读取结果，确认 `schema == "plf-cli/1"`、`command == "history"`、`success == true`、
+4. 按 UTF-8 捕获标准输出，在同一次调用内解析为内存对象；stderr 单独保留，不用 `2>&1` 混入 JSON。
+   确认 `schema == "plf-cli/1"`、`command == "history"`、`success == true`、
    `exit_code == 0`，并确认 `data.bar_count == data.bars.length`。分页失败不会返回部分成功的 bars。
    无数据仍为 `NO_HISTORY_DATA`，不得替换为空数组成功，也不为了补数据自动改周期或扩大区间。
 5. 成功结果的 `data.cleanup` 为本次作业删除回执。清理失败保留 `data.job_id`、
    `cleanup_failed/cleanup_error`；数据已完整取回时不因清理失败重新取数。
    失败响应保留原始错误和已知作业 ID，权限拒绝时立即停止，不换客户端或反复重提。
+
+默认调用示例（直接使用内存中的 `$HistoryResult.data.bars`）：
+
+```powershell
+$HistoryArguments = @(
+  'history', '--contract', $Contract, '--period', $Period,
+  '--start', [string]$StartTradeDate, '--end', [string]$EndTradeDate
+) + $RootArgs + @('--pid', [string]$ClientPid)
+$HistoryPreviousEncoding = [Console]::OutputEncoding
+try {
+  [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+  $HistoryRaw = & $Cli @HistoryArguments
+} finally {
+  [Console]::OutputEncoding = $HistoryPreviousEncoding
+}
+$HistoryJson = $HistoryRaw -join [Environment]::NewLine
+if ([string]::IsNullOrWhiteSpace($HistoryJson)) {
+  throw 'history returned no JSON on stdout; do not resubmit or add --out automatically.'
+}
+$HistoryResult = ConvertFrom-Json -InputObject $HistoryJson -ErrorAction Stop
+```
+
+调用和解析放在同一次工具调用中；需要展示时从内存对象提取所需数据或摘要，避免把完整大数组
+打印到工具输出后再依赖可能被截断的回显解析。stdout 为空、截断或无法解析时报告响应读取失败，
+保留已经取得的作业 ID，不自动补 `--out`、重定向文件或重复提交同一取数请求。
 
 响应沿用 `plf-cli/1`，`data` 直接包含以下字段（不是 `data.response.data`）：
 
@@ -81,8 +108,9 @@ plf-cli run --source <source.fml> --name <internal-name>
 `position` 沿用数据源语义：期货为持仓量，股票为成交额。周/月沿用下节的区间内日线合成规则，
 保留首尾不完整周期；`calendar_source/calendar_range_policy/calendar_boundary_policy` 会随结果回显。
 
-只用于分析的响应属于临时 JSON，按既有规则清理；用户明确要求保存数据时保留其指定的正式
-JSON 文件，不当作中间文件删除。取数本身不生成回测报告，也不授权额外回测或绘图。
+默认只在内存中使用历史响应，不创建由 Skill 管理的历史响应文件或缓存。CLI 内部分页汇总仍会
+使用调用结束后自动删除的临时文件。用户明确要求保存数据时保留其指定的正式 JSON 文件，
+不当作中间文件删除。取数本身不生成回测报告，也不授权额外回测或绘图。
 
 ## 周期规则
 
@@ -115,7 +143,7 @@ JSON 文件，不当作中间文件删除。取数本身不生成回测报告，
 
 `--root` 是盘立方安装目录，所有命令都支持；本 Skill 的每次调用都要带上它，
 取值来自 `paths.ps1` 的 `$RootArgs`（即 `@('--root', $Root)`），
-必须在子命令之后、`--out` 之前插入，且与 `--root` 的值分成两个独立数组元素：
+必须在子命令之后插入；使用 `--out` 时放在它之前，且与 `--root` 的值分成两个独立数组元素：
 
 ```powershell
 $CliArguments = @('compile', '--source', $Source) + $RootArgs + @('--out', $Output)
@@ -141,7 +169,8 @@ CLI 用 `--root` 校验 IPC 命名管道的归属方就是该安装目录的 EJC
 ## Windows 命令执行约束
 
 - 本机 Bash 缺少 `ls`、`dirname` 等 coreutils，调用会退出 127；本 Skill 全程使用 PowerShell，不降级到 Bash。
-- 每次调用都传一个尚不存在的 `--out` JSON 路径。该文件是响应的权威来源；标准输出仅作辅助，标准输出为空不代表 CLI 没有执行。
+- `history` 默认直接捕获 UTF-8 标准输出并在同一次调用内解析，不传 `--out`，详见历史 K 线取数。
+  其他命令每次传一个尚不存在的 `--out` JSON 路径，该文件是其响应的权威来源；标准输出仅作辅助。
 - 可执行文件和参数必须分离。中文显示名先放入变量，再作为参数数组中的一个完整元素传递：
 
 运行前，先用文件编辑能力创建 UTF-8 编码的 `$DisplayNameFile`，内容例如
@@ -173,8 +202,9 @@ try {
 }
 ```
 
-- 本机执行器可能吞掉 PowerShell 子进程标准输出。调用完成后无论是否看到输出，都读取 `--out` JSON；文件不存在或无法解析才视为调用协议失败。
-- PowerShell 5.1 读取响应 JSON 时必须显式使用 `Get-Content -Raw -Encoding UTF8`。省略 `-Encoding UTF8` 可能只让中文 `data.display_name` 显示成乱码；JSON 文件本身仍可能完全正确，不能据此误判为 CLI 写错显示名或重新注册公式。
+- 对使用 `--out` 的命令，本机执行器可能吞掉 PowerShell 子进程标准输出；调用后读取本次响应文件。
+  `history` 按专节在进程内直接捕获、解析 stdout，不把执行器回显当作数据源，也不自动落盘重试。
+- PowerShell 5.1 读取响应 JSON 文件时必须显式使用 `Get-Content -Raw -Encoding UTF8`。省略 `-Encoding UTF8` 可能只让中文 `data.display_name` 显示成乱码；JSON 文件本身仍可能完全正确，不能据此误判为 CLI 写错显示名或重新注册公式。
 - 不得在 `& $Cli @Arguments` 后添加 `| Out-Null`、重定向到管道或其他 PowerShell 管道操作。本机实测带管道时 `$LASTEXITCODE` 会错误地变成 70，而 JSON `exit_code` 仍为真实的 0。
 - JSON 内的 `success`、`exit_code` 和结构化字段是唯一判定依据；不得使用 `$LASTEXITCODE`，也不得只凭执行器显示的退出码作成功判断。
 - 不得把含中文公式名的整条命令拼成一个 shell 字符串，避免管道、引号、代码页或 shell 转义改变 `--display-name`。
