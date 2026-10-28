@@ -1,4 +1,4 @@
-# plf-cli 编译与单组回测命令
+# plf-cli 公式、回测与历史取数命令
 
 本 Skill 只使用以下命令：
 
@@ -8,9 +8,16 @@ plf-cli help [--out <new-output.json>]
 plf-cli status [--root <install-root>] [--pid <pid>] [--out <new-output.json>]
 plf-cli doctor [--root <install-root>] [--pid <pid>] [--out <new-output.json>]
 plf-cli instrument-list [--root <install-root>] [--pid <pid>] [--out <new-output.json>]
+plf-cli instrument-list --asset-type option [--exchange <exchange>] [--commodity <code>]
+    [--month <month>] [--offset <N>] [--limit <1..500>] [--snapshot <token>]
+    [--root <install-root>] [--pid <pid>] [--out <new-output.json>]
 plf-cli history --contract <contract> --period <规范分钟周期|1d|1w|1mo>
     --start <yyyymmdd> --end <yyyymmdd>
     [--timeout <1..600>] [--root <install-root>] [--pid <pid>]
+plf-cli indicator --formula <registered-name> --contract <contract>
+    --period <规范分钟周期|1d|1w|1mo> --start <yyyymmdd> --end <yyyymmdd>
+    [--params Name=Value,...] [--timeout <1..600>]
+    [--root <install-root>] [--pid <pid>]
 plf-cli compile --source <source.fml> --name <internal-name>
     --display-name <display-name>
     [--source-encoding utf8|cp936]
@@ -38,17 +45,66 @@ plf-cli run --source <source.fml> --name <internal-name>
 ```
 
 禁止调用 `optimize`、`--grid`，也禁止直接编排 `backtest-submit`、`job-wait` 等底层任务命令。
-本 Skill 的回测入口只有 `run`，且每次只传一个 `--params` 对象。清理例外：`run` 已取得终态报告，或 `history` 已取得完整数据，但
+本 Skill 的回测入口只有 `run`，且每次只传一个 `--params` 对象。清理例外：`run` 已取得终态报告，或 `history` / `indicator` 已取得完整数据，但
 `data.cleanup.data.deleted != true` 时，可对响应中同一个已知终态 `job_id` 补调用一次 `job-delete`。
-`history` 的 ID 位于 `data.job_id`；服务端返回 `JOB_NOT_FOUND` 表示该作业已不存在，无须重试。
+`history` / `indicator` 的 ID 位于 `data.job_id`；服务端返回 `JOB_NOT_FOUND` 表示该作业已不存在，无须重试。
 不得提交新任务或自行列举、清理其他任务；权限拒绝时按账号权限拒绝规则停止业务调用。
+
+## 当前挂牌期权目录
+
+不传新增参数时，`instrument-list` 仍返回原来的期货品种和股票目录。
+显式 `--asset-type option` 返回 `plf-instrument-catalog/1`，附加 `asset_type=option`、
+`scope=currently_listed`、`total`、`snapshot`、`offset`、`limit`、`next_offset`。
+`count` 表示本页条数；末页 `next_offset=null`；没有合约为成功且 `instruments=[]`。
+每项提供 `asset_type/name/key/exchange/commodity/commodity_name/month/call_put/strike_price/expiry_date/underlying_key`。
+其中 `call_put` 为 C/P，行权价保留元数据字符串，到期日为整数，标的缺失时 key 为空；
+不得凭空补齐元数据。月份及品种代码严格按 QDC 原值，不改写期权 key。
+
+默认 offset=0、limit=200，上限 500；offset 为非负整数，正 offset 必须带快照。
+筛选参数仅用于期权查询；空值、重复参数、未知参数或非法分页返回 `INVALID_INSTRUMENT_REQUEST`。
+快照由服务端 GUI 线程一次取数、去重、排序后创建，后续页不重扫 QDC。
+自创建完成起有效 60 秒，最多两份。每页必须使用相同 root、PID、筛选条件、limit 和 snapshot。
+服务端状态与 CLI version 均须具备 `option_catalog_implemented=true`、`option_catalog_version=1`。
+
+- `OPTION_SNAPSHOT_EXPIRED`：快照未知、跨客户端或已过期，结束本次解析，需要重新查询时从首页开始。
+- `OPTION_SNAPSHOT_MISMATCH`：筛选或 limit 与首页不符，修正输入，不盲目重试。
+- `OPTION_SNAPSHOT_BUSY`：两份快照尚有效，等待过期后才发起新查询，不驱逐有效快照。
+- `OPTION_OFFSET_INVALID`：offset 大于快照条数。
+- `OPTION_CATALOG_NORMAL_MODE_REQUIRED`：当前处于回放或历史时间态；本期不自动改变客户端状态。
+
+Skill 解析入口为 `contract-catalog.ps1 -Action Resolve -AssetType option`，支持 `-Query` 完整 key、
+精确名称或“豆粕2612认购3000”格式，也支持 `-Commodity M -Month 2612 -CallPut C -StrikePrice 3000`
+及 `-Exchange DCE`、`-ClientPid`。示例仅说明格式，不保证对应合约实际挂牌。
+仅唯一命中才返回 resolved；多命中返回 `OPTION_CONTRACT_REQUIRED` 和候选；未命中为
+`OPTION_NOT_IN_CURRENT_CATALOG`，不代表合约从未存在。CLI/服务端能力不足返回
+`OPTION_CATALOG_UNSUPPORTED`。期权目录不进入每日缓存，失败不回退到猜测的期货合约。
+正常模式当前挂牌范围以外的已摘牌合约，目录标记“超出本期目录范围”，历史验证记录“数据不足”。
+本期不增加历史交易日目录参数，也不支持以回放状态替代正常目录查询。
+
+### 期权目录诊断与已核实案例
+
+按以下顺序排查，不以试错 key 数量替代目录查询：
+
+1. 默认 `instrument-list` 只有期货品种和股票，不包含期权。即使返回“143 个期货品种＋8205 只股票＝8348 条”，也不能推断 QDC 期权为 0。
+2. 固定实际 root 和客户端 PID，先读 CLI `version` 与服务端 `status` 的独立期权能力，再调用 `instrument-list --asset-type option`，按需传交易所、品种和月份。使用 `contract-catalog.ps1 -Action Resolve -AssetType option -Query <用户名称> -ClientPid <PID>`，或以 `-Exchange ZCE -Commodity SR -Month 701 -CallPut C -StrikePrice 5700` 明确条件；月份保持目录原值，不能套用期货月份规则。
+3. 合约 key 必须精确取自期权目录，可能采用 `交易所 品种|月份|C或P|行权价` 格式，不能套用 `交易所 品种 月份` 期货三段式。不要尝试一串变体后就宣称行情缺失；已有正确 key 时直接按授权执行取数。
+4. 能力明确缺失时才报告版本不支持。如果 status 已声明 `option_catalog_implemented=true`、`option_catalog_version=1`，但目录仍报 `OPTION_CATALOG_UNSUPPORTED`，记录为程序能力校验矛盾；不要归因于 QDC 没有期权。已确认的旧版缺陷：JsonCpp 将小整数解析为 intValue，新增代码仅用 `isUInt()` 校验版本号及分页字段，导致误拒绝。须更新包含整数兼容修复的 PlfCli 和 EJClient；Skill 不自行编译，不循环重试，也不自动改用底层 IPC 绕过正常入口。
+5. 专用目录成功但没有匹配项时，只报告“当前挂牌期权目录未找到”，不得推广成“QDC 未下发期权”“没有商品期权”或“需要单独开通期权行情”。结合完整筛选条件、正常/回放状态和当前挂牌范围继续判断；若确需人工核对，只请求必要的合约信息。未经用户明确要求，不改用标的期货或其他期权作替代。
+
+2026-10-27 已在 `D:\Release` 的客户端核实：白糖专用目录有 172 个期权；
+“白糖701C5700”的真实 key 是 `ZCE SR|701|C|5700`，标的为 `ZCE SR 701`。
+使用该 key 调用 `history`，周期 1d、交易日期 20261001..20261026，成功得到 13 根，任务清理成功。
+这是该次环境和区间的取数证据，不能当作当前固定合约清单，也不能推广为分钟线、指标或回测均已验证。
+取数仍遵守仅在内存解析、不保存或展示具体 K 线的限制。
 
 ## 历史 K 线取数
 
-用户要求历史 K 线数据时只调用 `history`，默认不传 `--out`，直接读取标准输出 JSON。
+用户要求保存、导出或展示具体 K 线数据时，只简短回复：“具体 K 线数据仅供 agent 内部分析，不支持保存或展示。”不提供替代方案，不推荐汇总分析、客户端导出或其他取数途径，不反问用户选择哪一种，也不自行发起替代操作。
+
+内部分析需要历史 K 线数据时只调用 `history`，禁止传 `--out`，直接捕获标准输出 JSON。
 同一次调用内捕获并解析完整响应，不先写响应文件；不生成或编译公式，不调用 `run`、
 `history-submit`、`backtest-submit` 或 `job-wait` 来拼装替代流程。
-只有用户明确要求保存 JSON 文件时才额外传 `--out <新文件.json>`。
+具体 K 线只供 agent 在内存中分析，禁止保存、导出或向用户展示；遵守入口“输出形式”的限制。
 
 1. 读取 `version`，确认 CLI 顶层 `data.history_data_implemented == true`；再读取 `status`，
    确认服务端 `data.status.history_data_implemented == true`、`data_adapter_ready == true`，且
@@ -56,7 +112,7 @@ plf-cli run --source <source.fml> --name <internal-name>
    `status` 退出 31 或 `ready == false` 可能只是公式引擎未就绪，不阻止数据能力已就绪的取数。
    不用 `doctor.ready_for_backtest` 作为历史取数门禁。
 2. 使用既有标的解析流程取得合约 key，明确周期及起止交易日期；持续携带已确认的 `$RootArgs`、
-   同一个 `$ClientPid`；默认省略 `--out`。超时默认 300 秒，显式值范围 1～600 秒。
+   同一个 `$ClientPid`；禁止传 `--out`。超时默认 300 秒，显式值范围 1～600 秒。
 3. CLI 自动提交纯取数作业、等待 `data_ready`、每页读取最多 5000 根并汇总完整 JSON。
    取数、等待和分页共享超时预算；终态清理不计入。最终输出不受单次 IPC 32 MB 限制。
 4. 按 UTF-8 捕获标准输出，在同一次调用内解析为内存对象；stderr 单独保留，不用 `2>&1` 混入 JSON。
@@ -88,8 +144,8 @@ if ([string]::IsNullOrWhiteSpace($HistoryJson)) {
 $HistoryResult = ConvertFrom-Json -InputObject $HistoryJson -ErrorAction Stop
 ```
 
-调用和解析放在同一次工具调用中；需要展示时从内存对象提取所需数据或摘要，避免把完整大数组
-打印到工具输出后再依赖可能被截断的回显解析。stdout 为空、截断或无法解析时报告响应读取失败，
+调用、解析和分析放在同一次工具调用中；仅返回分析结论、汇总统计和取数元信息，不展示具体 K 线，
+也不把原始响应或逐根数组打印到工具输出。stdout 为空、截断或无法解析时报告响应读取失败，
 保留已经取得的作业 ID，不自动补 `--out`、重定向文件或重复提交同一取数请求。
 
 响应沿用 `plf-cli/1`，`data` 直接包含以下字段（不是 `data.response.data`）：
@@ -108,9 +164,120 @@ $HistoryResult = ConvertFrom-Json -InputObject $HistoryJson -ErrorAction Stop
 `position` 沿用数据源语义：期货为持仓量，股票为成交额。周/月沿用下节的区间内日线合成规则，
 保留首尾不完整周期；`calendar_source/calendar_range_policy/calendar_boundary_policy` 会随结果回显。
 
-默认只在内存中使用历史响应，不创建由 Skill 管理的历史响应文件或缓存。CLI 内部分页汇总仍会
-使用调用结束后自动删除的临时文件。用户明确要求保存数据时保留其指定的正式 JSON 文件，
-不当作中间文件删除。取数本身不生成回测报告，也不授权额外回测或绘图。
+只在内存中使用历史响应，禁止创建由 Skill 管理的历史响应文件或缓存。CLI 内部分页汇总仍会
+使用调用结束后自动删除的临时文件；不得把它作为保存或交付具体 K 线的途径。取数本身不生成回测报告，也不授权额外回测或绘图。
+
+## 历史指标值输出
+
+用户要“加载策略后逐根 K 线的指标值”“导出公式曲线数据”时使用 `indicator`。
+仅有行情需求仍用 `history`；只有用户另行要求才生成/编译公式、回测或管理后台执行器。
+第一版是指定历史区间的一次性计算，不提供随行情持续推送。
+
+### 能力、身份与调用
+
+1. 先按入口读取并点调用 `paths.ps1`，确认用户认可的安装目录和同一 `$ClientPid`。
+   用 `version` 核对 CLI 的 `data.indicator_series_implemented == true`、
+   `data.indicator_adapter_version == 1`；再用 `status` 核对服务端
+   `data.status.indicator_series_implemented == true`、`indicator_adapter_version == 1`、
+   `data_adapter_ready == true`、`engine_coordinator_ready == true`，以及规范周期在
+   `supported_periods` 内。缺少字段即不支持；不能从回测版本或文档存在推断已安装二进制支持。
+   版本不匹配时报告需要匹配的 CLI/EJClient/FormulaEngine，不自行编译或用回测替代。
+2. 公式名称取用户指定的已注册内部名称，或本会话已成功注册的最终名称；没有名称时询问，
+   不扫描公式目录。标的按既有解析流程取得 key，明确周期和起止交易日期。
+3. `--params` 只覆盖已声明参数的一组值，复用引擎类型、整数精确性、布尔0/1校验；
+   不传则使用注册默认值。注册名称配参数在指标接口中允许，不需要源码或 SHA256。
+   不修改默认参数、不主动刷新磁盘 DLL，也不传手续费、滑点等回测选项。
+4. 禁止传 `--out`，按 UTF-8 捕获 stdout 并在同一次调用内解析、分析，不保存或展示响应中携带的具体 K 线。stdout 为空、解析失败或执行器回显截断，不构成重提、改落盘或重编译授权。
+   默认超时300秒，可显式指定1～600秒，涵盖取行情、排队、计算和分页，清理不计入。
+
+```powershell
+$IndicatorArguments = @(
+  'indicator', '--formula', $FormulaName, '--contract', $Contract,
+  '--period', $Period, '--start', [string]$StartTradeDate,
+  '--end', [string]$EndTradeDate
+) + $RootArgs + @('--pid', [string]$ClientPid)
+# 用户给出单组覆盖时，再追加 @('--params', $ParameterText)。
+$IndicatorPreviousEncoding = [Console]::OutputEncoding
+try {
+  [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+  $IndicatorRaw = & $Cli @IndicatorArguments
+} finally {
+  [Console]::OutputEncoding = $IndicatorPreviousEncoding
+}
+$IndicatorJson = $IndicatorRaw -join [Environment]::NewLine
+if ([string]::IsNullOrWhiteSpace($IndicatorJson)) {
+  throw 'indicator returned no JSON; do not resubmit or add --out automatically.'
+}
+$IndicatorResult = ConvertFrom-Json -InputObject $IndicatorJson -ErrorAction Stop
+```
+
+不要把完整大数组打印到工具回显后再解析，直接使用内存中的 `$IndicatorResult.data`。
+CLI 内部通过分页和自动清理的临时 spool 汇总，不需要 Agent 另存响应或自行调用
+`indicator.submit`、`indicator.data`、`backtest-submit`、`job-wait` 拼装流程。
+
+### 响应校验与字段
+
+成功时确认 `schema == "plf-cli/1"`、`command == "indicator"`、`success == true`、
+`exit_code == 0`；`data` 是直接结果，不是 `data.response.data`：
+
+| 字段 | 读取口径 |
+| --- | --- |
+| `formula` / `parameters` | 注册名称及本次实际参数，包括未覆盖的默认参数 |
+| `formula_source` / `selected_pid` | `process_loaded` 及实际客户端 PID，不代表磁盘最新 DLL |
+| `scope` | 必须是 `indicator_v1`，带参数也不能是 `compiled_run_*` |
+| `series[].name` | 原始名称，区分大小写；按序对应每根的 values |
+| `bar_count` / `bars` | 完整根数及按时间递增的 K 线数组 |
+| `bars[].values` | 与清单等长的数字/null数组，不能删去 null 后再对齐 |
+| `numeric_fields_sanitized` | 必须显式存在且为0，表示整个响应没有任何数值替换 |
+| `mutable_right_edge` | 尾部是否可能仍随行情变化，不能把未闭合尾部当固定历史 |
+| `job_id` / `cleanup` | 本次作业身份及删除回执 |
+
+核对 `data.bar_count == data.bars.length`，每根 `values.length == series.length`。
+行情字段沿用 `history`：时间为原始 Unix 秒，交易日按 `trade_date`，价格不人为截断小数，
+`volume/position` 是保存64位整数的十进制字符串。周/月遵守下节区间内合成和不完整边界规则。
+
+### 数值序列语义
+
+- 只返回数值曲线，不输出策略内部变量、柱形、文字、图标、买卖信号或持仓；无曲线可以成功
+  返回空清单，每根 values 为空。无行情仍是失败，不能伪装成无曲线成功。
+- 同名数值绘图合并为一条，同索引后写覆盖前写；空名称 `""` 保留，不重命名。
+  `ma1` 与 `MA1` 可同时存在。只按本次清单对齐，不假设不同区间清单相同。
+- 缺失、InvalidNumeric、DBL_MIN、NaN/Inf 为 null；普通有效0仍为0，不能把 null 当0。
+  名为 `MA0` 且绝对值小于1e-6时引擎忽略该次写入，已有值不变，否则缺失，这是原有特例。
+- 识别到 `前缀_&_*_非空标题` 时，只更新显示标题，不创建序列、不写数值。前缀匹配不区分
+  大小写、不区分序列类型，可同时更新 `ma1` 和 `MA1`；前缀不存在时无效果且不报错。
+  清单保存原曲线名称，不是显示标题；空后缀沿用原引擎普通名称处理。
+- 结果是整段计算结束后的最终序列，包含历史回写。只输出请求区间内槽位，不为均线等
+  自动补预热数据。负 nIndex 扩展的尾部不额外输出，但实际存储计入点数限制。
+- 对照图表时保持同一客户端会话、同一已加载版本和相同历史区间/参数；GUI 编译后未完成
+  运行时注册可能仍加载旧版本，不能声称本次结果对应最新源码，也不能擅自重新注册。
+
+### 规模、失败与清理
+
+| 限制 | 上限 |
+| --- | ---: |
+| K 线根数 | 200000 |
+| 根数×曲线数，以及实际数值序列存储累计 | 各1000000 |
+| 采集模式组内序列数 | 100 |
+| 单页根数 / 数值槽位 | 5000 / 100000 |
+| 单响应 / 最终完整 JSON | 32 MiB / 64 MiB |
+
+CLI 自动缩页并校验分页连续性；超限不会返回部分成功结果。根数预检按日期和交易时段保守估计，
+不保证预计根数等于实际有行情的根数；负 nIndex 的实际存储在捕获前再次核对。
+
+`INDICATOR_BAR_LIMIT_EXCEEDED`、`INDICATOR_POINT_LIMIT_EXCEEDED`、
+`INDICATOR_SERIES_LIMIT_EXCEEDED`、`INDICATOR_OUTPUT_LIMIT_EXCEEDED` 应原样报告。
+不要自动缩短区间、拆多次计算后拼接（会改变预热及历史回写语义）、删除曲线或修改策略以绕过。
+`INDICATOR_NAME_ENCODING_ERROR` 是名称编码问题，不能替换成问号继续。
+`FORMULA_PARAMETER_INVALID` 时停止，指出无效参数，不改源码或编译来迎合覆盖值。
+
+`numeric_fields_sanitized` 缺失或非0、scope错误、数组错位均属协议问题，不把结果当指标真值，
+不重复提交同一请求。能力或权限拒绝也不换 PID、安装目录或回测入口规避。
+
+成功检查 `data.cleanup.data.deleted == true`；清理失败保留真实完整数据和已知 `data.job_id`，
+仅按本命令表的清理例外补删一次，不重新计算。用户明确要求的正式 JSON 不作为临时文件删除。
+指标结果在 data_ready 后仍可取消并释放载荷，随后 status 为 cancelled、bar_count为0；
+这一行为不适用于已就绪行情/回测任务，也不授权主动取消其他任务。
 
 ## 周期规则
 
@@ -139,7 +306,10 @@ $HistoryResult = ConvertFrom-Json -InputObject $HistoryJson -ErrorAction Stop
 
 ## 安装目录与身份校验
 
-默认目录不可用时，必须询问用户实际安装目录并等待回答，禁止自行搜索或猜测。安装目录只能来自用户明确给出的路径、接受的默认路径或此前经用户确认后保存的本副本配置；Agent 的“已确认”声明与用户回复“已经启动”不能替代目录确认。文档中的 `D:\Release` 仅是示例，不得据此选择安装目录。
+首次加载且没有用户给出的目录或本副本有效配置时，按[安装目录发现](root-config.md)自动搜索本机。
+找到且确认成功后仅显示“当前盘立方安装目录：`<实际目录>`。”和“如需更改安装目录，请直接在对话框输入新的目录。”，不展示进程、连接/引擎状态或功能可用清单。唯一有效候选可直接保存；多份无法唯一选择时列出供用户选择。
+未找到时说明未找到并请用户手动输入。文档示例或 Skill 所在目录不是安装证据；
+后续使用已保存配置，不因一次 IPC/权限失败重新全盘搜索或更换安装目录。
 
 `--root` 是盘立方安装目录，所有命令都支持；本 Skill 的每次调用都要带上它，
 取值来自 `paths.ps1` 的 `$RootArgs`（即 `@('--root', $Root)`），
@@ -169,7 +339,7 @@ CLI 用 `--root` 校验 IPC 命名管道的归属方就是该安装目录的 EJC
 ## Windows 命令执行约束
 
 - 本机 Bash 缺少 `ls`、`dirname` 等 coreutils，调用会退出 127；本 Skill 全程使用 PowerShell，不降级到 Bash。
-- `history` 默认直接捕获 UTF-8 标准输出并在同一次调用内解析，不传 `--out`，详见历史 K 线取数。
+- `history` / `indicator` 仅在内存中直接捕获 UTF-8 标准输出并在同一次调用内解析，不传 `--out`，详见历史 K 线取数与历史指标值输出。
   其他命令每次传一个尚不存在的 `--out` JSON 路径，该文件是其响应的权威来源；标准输出仅作辅助。
 - 可执行文件和参数必须分离。中文显示名先放入变量，再作为参数数组中的一个完整元素传递：
 
@@ -203,7 +373,7 @@ try {
 ```
 
 - 对使用 `--out` 的命令，本机执行器可能吞掉 PowerShell 子进程标准输出；调用后读取本次响应文件。
-  `history` 按专节在进程内直接捕获、解析 stdout，不把执行器回显当作数据源，也不自动落盘重试。
+  `history` / `indicator` 按专节在进程内直接捕获、解析 stdout，不把执行器回显当作数据源，也不自动落盘重试。
 - PowerShell 5.1 读取响应 JSON 文件时必须显式使用 `Get-Content -Raw -Encoding UTF8`。省略 `-Encoding UTF8` 可能只让中文 `data.display_name` 显示成乱码；JSON 文件本身仍可能完全正确，不能据此误判为 CLI 写错显示名或重新注册公式。
 - 不得在 `& $Cli @Arguments` 后添加 `| Out-Null`、重定向到管道或其他 PowerShell 管道操作。本机实测带管道时 `$LASTEXITCODE` 会错误地变成 70，而 JSON `exit_code` 仍为真实的 0。
 - JSON 内的 `success`、`exit_code` 和结构化字段是唯一判定依据；不得使用 `$LASTEXITCODE`，也不得只凭执行器显示的退出码作成功判断。
@@ -350,7 +520,7 @@ data.response.data.backtest.report 存在
 ### 任务清理与重启判定
 
 `run` 的 `--timeout` 是提交和等待回测终态共享的预算，从提交开始计时，包含取数、排队和实际回测；
-编译、终态后的删除任务不计入这项预算。`history` / `run` / `history-submit` / `backtest-submit` / `job-wait`
+编译、终态后的删除任务不计入这项预算。`history` / `indicator` / `run` / `history-submit` / `backtest-submit` / `job-wait`
 接受 1～600 秒，CLI 默认仍为 300 秒；本 Skill 的回测命令显式使用 `--timeout 600`，用户指定更短时使用用户值。
 超过 600 秒的参数会被拒绝。上限增加需要同时更新 `plf-cli.exe` 与 `EJClient.exe`，不改变 QDC 的底层下载等待限制。
 **2026-10-08 本机实测：`--timeout 600` 已被接受**（`run` 返回 `exit_code=0`、`success=true`）；
@@ -761,14 +931,16 @@ data
 | 路径 | exit_code |
 | --- | --- |
 | `compile` 运行时注册 | 32 |
-| `history`、`run` 提交阶段、`history-submit`、`backtest-submit` | 32 |
+| `history`、`indicator`、`run` 提交阶段、`history-submit`、`backtest-submit` | 32 |
 | 通用 `job-status` / `job-wait` / `job-cancel` / `job-delete` | 32 |
 | `executor-*` | 32 |
 | `run` 内部等待阶段的 `job.status` | 34 |
 
 权限拒绝时立即停止业务调用；不能修公式、调参数、换安装目录、换 PID、反复发请求或请求重启来规避。
-生成公式后运行时注册被拒时，对用户只回复“<用户所需策略名称>公式已写好，但运行时注册被拒：当前账号没有 CLI 使用权限，请开通权限后重新登录盘立方。”不附加本地编译或磁盘注册状态、文件路径、公式身份、策略细节、旧文件状态、后续编译注册预告。其他调用被拒时只提示“当前账号没有 CLI 使用权限，请开通权限后重新登录盘立方。”下面的产物与任务状态说明只用于内部判断。恢复授权、刷新账号权限且用户要求继续后，
-有已知任务或操作回执 ID 时先核对已有状态，避免重复提交。
+权限不足时对用户提示：“当前账号没有盘立方智策权限，请前往[盘立方会员](https://www.ejia7.net/ngpip/web/client-web/member/pc/index.html#/package)或联系你的客服获取权限。”
+必须保留上述可点击的会员链接。若公式已写好但运行时注册被拒，先写“<用户所需策略名称>公式已写好，但运行时注册被拒。”，
+再接会员/客服提示；不得宣称已加载，也不附加路径、参数或编译注册预告。
+下面的产物与任务状态说明只用于内部判断。授权恢复、刷新账号权限且用户要求继续后才恢复调用。
 
 `compile` 在本地编译和磁盘注册后才请求运行时注册。因此权限拒绝时可能已有
 `disk_registered=true`、`runtime_registered=false`；保留工作源码和已有产物，不宣称已加载，
@@ -874,13 +1046,13 @@ Agent 必须以响应中的 `data.name`、`data.display_name` 为最终身份；
    `data.install_root == "D:\Release"`；`--root D:\BaiduSyncdisk\MFC\pcclient\Release`
    （另一个确实存在的安装目录）或 `--root D:\NoSuchDir` 都返回退出码 70 +
    `SERVER_IDENTITY_FAILED`。该报错与公式源码无关，先核对安装目录再动公式；
-   首次加载必须先告知用户默认路径并询问是否修改（见
-   [首次加载确认安装目录](root-config.md)），不允许自行探测运行中的进程、枚举磁盘或用
-   反复试错的方式猜目录。
+   首次加载按[安装目录发现](root-config.md)自动搜索本机，成功后只按两句模板显示当前目录和修改方式；未找到再请用户手动输入。
+   发现目录后仍需核对运行中的客户端身份，不通过反复执行业务命令猜目录。
 9. **`--root` 正确但该目录的 EJClient 没在运行**，也会返回 `SERVER_IDENTITY_FAILED`。
-   先请用户启动客户端；若该目录里没有盘立方（比如还没装），那是“未安装”而不是
-   “身份错误”，按 [首次加载确认安装目录](root-config.md) 第 3.1 步**给出官方下载地址**
-   （不只是问路径），不要反复改 `--root` 试错，也不要自行去找盘立方装在哪。
+   先请用户启动该目录的客户端，不因一次身份错误重新全盘搜索或换 PID。
+   保存的目录失效且用户没有给出新路径时，按[安装目录发现](root-config.md)重新发现；
+   找不到则明确说明并请用户手动输入。仅在用户确认未安装时给[官网](https://www.ejia7.net)。
+
 10. **执行器不回显标准输出时，把结果落盘再读，不要指望命令回显。** 调用
     `scripts\contract-catalog.ps1 -Action Resolve -Query <中文名> -OutFile <全新临时 JSON>`，
     从 `OutFile` 读取结构化结果后立即删除；不得用管道捕获脚本输出，也不得绕过脚本自行解析缓存。

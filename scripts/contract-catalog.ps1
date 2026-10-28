@@ -2,7 +2,14 @@ param(
     [ValidateSet('Ensure', 'Resolve')]
     [string]$Action = 'Ensure',
     [string]$Query = '',
-    [string]$OutFile = ''
+    [string]$OutFile = '',
+    [ValidateSet('', 'option')][string]$AssetType = '',
+    [string]$Exchange = '',
+    [string]$Commodity = '',
+    [string]$Month = '',
+    [ValidateSet('', 'C', 'P')][string]$CallPut = '',
+    [string]$StrikePrice = '',
+    [ValidateRange(0, 2147483647)][int]$ClientPid = 0
 )
 
 $ErrorActionPreference = 'Stop'
@@ -31,6 +38,168 @@ if (-not $RootReady) {
     })
     exit 31
 }
+
+# Option discovery is on demand and never enters the daily future/stock cache.
+function Invoke-OptionCli([object[]]$Arguments) {
+    $temporary = Join-Path ([IO.Path]::GetTempPath()) ('plf-option-' + [Guid]::NewGuid().ToString('N') + '.json')
+    try {
+        $stdout = & $Cli @Arguments --out $temporary
+        if (-not [IO.File]::Exists($temporary)) {
+            # Argument errors from older CLIs may be stdout-only.
+            if ($stdout) { return (($stdout -join "`n") | ConvertFrom-Json) }
+            throw 'CLI did not return a response.'
+        }
+        return ([IO.File]::ReadAllText($temporary, [Text.Encoding]::UTF8) | ConvertFrom-Json)
+    } finally {
+        if ([IO.File]::Exists($temporary)) { [IO.File]::Delete($temporary) }
+    }
+}
+
+function Resolve-OptionCatalog {
+    $optionQuery = $Query.Trim()
+    try {
+        if ($StrikePrice -and $StrikePrice -notmatch '^[0-9]+(?:\.[0-9]+)?$') { throw 'Invalid strike price.' }
+        $version = Invoke-OptionCli @('version')
+        if (-not $version.success -or $version.data.option_catalog_implemented -ne $true -or
+            $version.data.option_catalog_version -ne 1) {
+            return [ordered]@{status='error'; code='OPTION_CATALOG_UNSUPPORTED'; message=([regex]::Unescape('\u5f53\u524d CLI \u4e0d\u652f\u6301\u671f\u6743\u76ee\u5f55\uff0c\u8bf7\u66f4\u65b0 CLI\u3002'))}
+        }
+        $statusArgs = @('status') + $RootArgs
+        if ($ClientPid -gt 0) { $statusArgs += @('--pid', [string]$ClientPid) }
+        $state = Invoke-OptionCli $statusArgs
+        if ($state.error.code -eq 'PERMISSION_DENIED') {
+            return [ordered]@{status='error'; code='PERMISSION_DENIED'; message=[string]$state.error.message}
+        }
+        if ($state.data.status.option_catalog_implemented -ne $true -or
+            $state.data.status.option_catalog_version -ne 1) {
+            return [ordered]@{status='error'; code='OPTION_CATALOG_UNSUPPORTED'; message=([regex]::Unescape('\u5f53\u524d\u5ba2\u6237\u7aef\u4e0d\u652f\u6301\u671f\u6743\u76ee\u5f55\uff0c\u8bf7\u66f4\u65b0\u5ba2\u6237\u7aef\u3002'))}
+        }
+        $selectedClientPid = [int]$state.data.selected_pid
+        if ($selectedClientPid -le 0 -or ($ClientPid -gt 0 -and $selectedClientPid -ne $ClientPid)) {
+            throw 'No uniquely selected EJClient process.'
+        }
+        $baseArguments = @('instrument-list') + $RootArgs + @('--pid', [string]$selectedClientPid, '--asset-type', 'option', '--limit', '200')
+        if ($Exchange) { $baseArguments += @('--exchange', $Exchange) }
+        if ($Commodity) { $baseArguments += @('--commodity', $Commodity) }
+        if ($Month) { $baseArguments += @('--month', $Month) }
+        $offset = 0
+        $snapshot = ''
+        $total = -1
+        $allOptions = New-Object 'System.Collections.Generic.List[object]'
+        do {
+            $arguments = $baseArguments + @('--offset', [string]$offset)
+            if ($snapshot) { $arguments += @('--snapshot', $snapshot) }
+            $page = Invoke-OptionCli $arguments
+            if (-not $page.success) {
+                return [ordered]@{status='error'; code=[string]$page.error.code; message=[string]$page.error.message}
+            }
+            $data = $page.data
+            if ($data.schema -ne 'plf-instrument-catalog/1' -or $data.asset_type -ne 'option' -or
+                $data.scope -ne 'currently_listed' -or [int]$data.selected_pid -ne $selectedClientPid -or
+                [int]$data.offset -ne $offset -or [int]$data.limit -ne 200 -or
+                -not $data.snapshot -or $null -eq $data.total -or $null -eq $data.instruments -or
+                $data.PSObject.Properties.Name -notcontains 'next_offset') { throw 'Invalid option catalog page.' }
+            if ($snapshot -and ($snapshot -cne [string]$data.snapshot -or $total -ne [int]$data.total)) {
+                throw 'Option snapshot changed during pagination.'
+            }
+            $snapshot = [string]$data.snapshot
+            $total = [int]$data.total
+            $items = @($data.instruments)
+            if ($total -lt 0 -or [int]$data.count -ne $items.Count -or $items.Count -gt 200 -or
+                $offset + $items.Count -gt $total) { throw 'Invalid option catalog count.' }
+            foreach ($item in $items) {
+                if ($item.asset_type -ne 'option' -or -not $item.key) { throw 'Invalid option metadata.' }
+                $allOptions.Add($item)
+            }
+            if ($null -ne $data.next_offset) {
+                if ([int]$data.next_offset -ne $offset + $items.Count -or
+                    [int]$data.next_offset -le $offset -or [int]$data.next_offset -ge $total) { throw 'Invalid option pagination.' }
+                $offset = [int]$data.next_offset
+            } elseif ($allOptions.Count -ne $total) { throw 'Incomplete option catalog.' }
+        } while ($null -ne $data.next_offset)
+
+        $optionHits = @($allOptions | Where-Object { [string]$_.key -ceq $optionQuery })
+        if ($optionHits.Count -eq 0) { $optionHits = @($allOptions | Where-Object { [string]$_.name -ceq $optionQuery }) }
+        if ($optionHits.Count -eq 0) {
+            $product = ''
+            $wantedMonth = $Month
+            $wantedSide = $CallPut
+            $wantedStrike = $StrikePrice
+            $parsed = [regex]::Match($optionQuery, '^(?<product>.+?)\s*(?<month>[0-9]{4}|[0-9]{6})\s*(?<side>\u8ba4\u8d2d|\u8ba4\u6cbd|\u770b\u6da8|\u770b\u8dcc|\u8d2d|\u6cbd|C|P)\s*(?<strike>[0-9]+(?:\.[0-9]+)?)?$', 'IgnoreCase')
+            if ($parsed.Success) {
+                $product = $parsed.Groups['product'].Value.Trim()
+                if ($wantedMonth -and $wantedMonth -cne $parsed.Groups['month'].Value) { throw 'Conflicting option month.' }
+                $wantedMonth = $parsed.Groups['month'].Value
+                $side = $parsed.Groups['side'].Value
+                $parsedSide = if ($side -match '^(\u8ba4\u8d2d|\u770b\u6da8|\u8d2d|C)$') { 'C' } else { 'P' }
+                if ($wantedSide -and $wantedSide -ne $parsedSide) { throw 'Conflicting call/put condition.' }
+                $wantedSide = $parsedSide
+                if ($parsed.Groups['strike'].Success) {
+                    if ($wantedStrike -and [decimal]::Parse($wantedStrike, [Globalization.CultureInfo]::InvariantCulture) -ne
+                        [decimal]::Parse($parsed.Groups['strike'].Value, [Globalization.CultureInfo]::InvariantCulture)) { throw 'Conflicting strike condition.' }
+                    $wantedStrike = $parsed.Groups['strike'].Value
+                }
+            } elseif ($optionQuery -and $optionQuery -notmatch '\|') {
+                $product = $optionQuery -replace '\u671f\u6743$', ''
+            }
+            if ($wantedStrike -and $wantedStrike -notmatch '^[0-9]+(?:\.[0-9]+)?$') { throw 'Invalid strike price.' }
+            $productCodes = @()
+            if ($product) {
+                $seedFile = Join-Path $SkillDirectory 'references\contracts.seed.json'
+                if ([IO.File]::Exists($seedFile)) {
+                    $optionSeed = [IO.File]::ReadAllText($seedFile, [Text.Encoding]::UTF8) | ConvertFrom-Json
+                    $productCodes = @($optionSeed.products | Where-Object {
+                        [string]$_.code -ieq $product -or @($_.names | Where-Object { [string]$_ -ieq $product }).Count -gt 0
+                    })
+                }
+            }
+            # Unknown complete keys must never degrade to a guessed contract.
+            if ($optionQuery -notmatch '\|') {
+                $optionHits = @($allOptions | Where-Object {
+                    $item = $_
+                    $productMatch = -not $product -or [string]$item.commodity -ieq $product -or
+                        [string]$item.commodity_name -eq $product -or
+                        @($productCodes | Where-Object { [string]$_.code -ieq [string]$item.commodity -and [string]$_.ex -ieq [string]$item.exchange }).Count -gt 0
+                    $productMatch -and (-not $wantedMonth -or [string]$item.month -ceq $wantedMonth) -and
+                        (-not $wantedSide -or [string]$item.call_put -eq $wantedSide) -and
+                        (-not $wantedStrike -or [decimal]::Parse([string]$item.strike_price, [Globalization.CultureInfo]::InvariantCulture) -eq
+                            [decimal]::Parse($wantedStrike, [Globalization.CultureInfo]::InvariantCulture))
+                })
+            }
+        }
+        # Explicit conditions also constrain exact key/name matches.
+        $optionHits = @($optionHits | Where-Object {
+            (-not $CallPut -or [string]$_.call_put -eq $CallPut) -and
+            (-not $StrikePrice -or [decimal]::Parse([string]$_.strike_price, [Globalization.CultureInfo]::InvariantCulture) -eq
+                [decimal]::Parse($StrikePrice, [Globalization.CultureInfo]::InvariantCulture))
+        })
+        if ($optionHits.Count -eq 1) {
+            return [ordered]@{status='resolved'; query=$optionQuery; asset_type='option'; name=[string]$optionHits[0].name;
+                key=[string]$optionHits[0].key; selected_pid=$selectedClientPid; scope='currently_listed'}
+        }
+        if ($optionHits.Count -gt 1) {
+            return [ordered]@{status='ambiguous'; code='OPTION_CONTRACT_REQUIRED'; query=$optionQuery; asset_type='option';
+                count=$optionHits.Count; candidates=$optionHits; message=([regex]::Unescape('\u8bf7\u8865\u9f50\u54c1\u79cd\u3001\u6708\u4efd\u3001\u8ba4\u8d2d/\u8ba4\u6cbd\u548c\u884c\u6743\u4ef7\uff0c\u660e\u786e\u552f\u4e00\u5408\u7ea6\u3002'))}
+        }
+        return [ordered]@{status='not_found'; code='OPTION_NOT_IN_CURRENT_CATALOG'; query=$optionQuery; asset_type='option';
+            candidates=@(); message=([regex]::Unescape('\u5f53\u524d\u6302\u724c\u671f\u6743\u76ee\u5f55\u672a\u627e\u5230\u5339\u914d\u5408\u7ea6\uff1b\u5df2\u6458\u724c\u5408\u7ea6\u8d85\u51fa\u672c\u671f\u76ee\u5f55\u8303\u56f4\uff0c\u4e0d\u80fd\u636e\u6b64\u5224\u65ad\u5408\u7ea6\u4e0d\u5b58\u5728\u3002'))}
+    } catch {
+        return [ordered]@{status='error'; code='OPTION_CATALOG_QUERY_FAILED'; message=$_.Exception.Message}
+    }
+}
+
+function Write-OptionResolution {
+    $result = Resolve-OptionCatalog
+    Write-JsonResult $result
+    if ($result.status -eq 'resolved') { exit 0 }
+    if ($result.status -eq 'ambiguous') { exit 2 }
+    if ($result.status -eq 'not_found') { exit 3 }
+    exit 32
+}
+
+$OptionRequested = $AssetType -eq 'option' -or $Exchange -or $Commodity -or $Month -or $CallPut -or $StrikePrice -or
+    $Query -match '\||\u671f\u6743|\u8ba4\u8d2d|\u8ba4\u6cbd|\u770b\u6da8|\u770b\u8dcc|[0-9]\s*[CP\u8d2d\u6cbd]\s*[0-9]'
+if ($Action -eq 'Resolve' -and $OptionRequested) { Write-OptionResolution }
 
 [IO.Directory]::CreateDirectory($UserDataDir) | Out-Null
 $CachePath = Join-Path $UserDataDir 'instrument-catalog.json'
@@ -318,6 +487,14 @@ $ExactFuture = @(Find-Future $Query $FutureItems $Seed)
 if ($ExactFuture.Count -eq 1) {
     Write-FutureChoices $Query $ExactFuture[0]
     exit 2
+}
+
+# Exact option names without an obvious option suffix are checked only after
+# all established future/stock resolution paths have declined the query.
+$optionFallback = Resolve-OptionCatalog
+if ($optionFallback.status -eq 'resolved' -or $optionFallback.status -eq 'ambiguous') {
+    Write-JsonResult $optionFallback
+    exit $(if ($optionFallback.status -eq 'resolved') { 0 } else { 2 })
 }
 
 $Candidates = @($Items | Where-Object {

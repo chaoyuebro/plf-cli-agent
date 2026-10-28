@@ -6,22 +6,25 @@
 #
 # Usage (always pass a fresh -OutFile and read that JSON back):
 #   plf-root.ps1 -Action info  [-OutFile <new.json>]
+#   plf-root.ps1 -Action discover [-OutFile <new.json>]
 #   plf-root.ps1 -Action set -RootPath <dir> [-ResolvedFrom user] [-OutFile <new.json>]
 #   plf-root.ps1 -Action verify [-OutFile <new.json>]
 #   plf-root.ps1 -Action reset [-OutFile <new.json>]
 #
-# There is deliberately no discovery action: the skill never searches for the
-# installation. If the default directory has no Panlifang, the caller must ask
-# the user for the installation directory instead.
+# Discovery is read-only: inspect running clients and registry hints, then search
+# accessible fixed local drives for EJClient.exe if no installation was found.
+# It never runs a discovered executable or writes this copy's private state.
 
 [CmdletBinding()]
 param(
-    [ValidateSet('info', 'set', 'verify', 'reset')]
+    [ValidateSet('info', 'discover', 'set', 'verify', 'reset')]
     [string]$Action = 'info',
     [string]$RootPath,
     [string]$ResolvedFrom = 'user',
     [string]$OutFile,
-    [switch]$Quiet
+    [switch]$Quiet,
+    [string[]]$SearchRoots,
+    [ValidateRange(1,600)][int]$SearchTimeoutSeconds = 120
 )
 
 $ErrorActionPreference = 'Stop'
@@ -69,9 +72,13 @@ function Write-Failure {
 function Resolve-RootPath {
     param([string]$Dir)
     if (-not $Dir) { return $null }
-    $trimmed = $Dir.Trim().Trim('"').TrimEnd('\')
+    $trimmed = $Dir.Trim().Trim('"')
     if ($trimmed.Length -eq 0) { return $null }
-    try { return [IO.Path]::GetFullPath($trimmed) } catch { return $null }
+    try {
+        $absolute = [IO.Path]::GetFullPath($trimmed)
+        if ($absolute -eq [IO.Path]::GetPathRoot($absolute)) { return $absolute }
+        return $absolute.TrimEnd('\')
+    } catch { return $null }
 }
 
 function Get-PlfCliPath {
@@ -82,7 +89,7 @@ function Get-PlfCliPath {
             (Join-Path $Dir 'Debug\plf-cli.exe'),
             (Join-Path $Dir 'Release\plf-cli.exe')
         )) {
-        if (Test-Path -LiteralPath $candidate) { return $candidate }
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
     }
     return $null
 }
@@ -95,9 +102,104 @@ if (-not (Test-Path -LiteralPath $PathsFile)) {
 # $RootHelper, $Cli, $CliFound, $RootReady, $RootArgs and the skill paths.
 . $PathsFile
 
+if ($Action -eq 'discover') {
+    $found = [Collections.Generic.Dictionary[string,object]]::new([StringComparer]::OrdinalIgnoreCase)
+    $runningRoots = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $scanTimer = [Diagnostics.Stopwatch]::StartNew()
+    $scanTimedOut = $false
+    $unreadable = 0
+    function Add-InstallationCandidate([string]$Directory, [string]$Source) {
+        $candidateRoot = Resolve-RootPath $Directory
+        if (!$candidateRoot) { return }
+        if (![IO.File]::Exists((Join-Path $candidateRoot 'EJClient.exe'))) { return }
+        if (!$found.ContainsKey($candidateRoot)) {
+            $found.Add($candidateRoot, [pscustomobject]@{
+                root=$candidateRoot; cli=(Get-PlfCliPath $candidateRoot)
+                has_exe=$true; source=$Source; running=$runningRoots.Contains($candidateRoot)
+            })
+        } elseif ($runningRoots.Contains($candidateRoot)) {
+            $found[$candidateRoot].running=$true
+        }
+    }
+    # Explicit roots are useful for deterministic tests; they disable machine-wide hints.
+    if (!$SearchRoots -or $SearchRoots.Count -eq 0) {
+        foreach ($clientProcess in @(Get-Process -Name EJClient -ErrorAction SilentlyContinue)) {
+            try {
+                $clientExe = $clientProcess.Path
+                if ($clientExe) {
+                    $clientDirectory = Split-Path -Parent $clientExe
+                    [void]$runningRoots.Add($clientDirectory)
+                    Add-InstallationCandidate $clientDirectory 'running-client'
+                }
+            } catch { }
+        }
+        foreach ($hint in @($FallbackRoot, (Join-Path $env:ProgramFiles 'Ejia7\EjiaCube'),
+            (Join-Path $env:LOCALAPPDATA 'Ejia7\EjiaCube'))) {
+            Add-InstallationCandidate $hint 'common-location'
+        }
+        foreach ($registryBase in @('HKCU:\Software\Microsoft\Windows\CurrentVersion',
+            'HKLM:\Software\Microsoft\Windows\CurrentVersion',
+            'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion')) {
+            $appPath = Join-Path $registryBase 'App Paths\EJClient.exe'
+            try {
+                $key = Get-Item -LiteralPath $appPath -ErrorAction Stop
+                $exeHint = [string]$key.GetValue('')
+                if ($exeHint) { Add-InstallationCandidate (Split-Path -Parent $exeHint.Trim('"')) 'registry-app-path' }
+            } catch { }
+            foreach ($entry in @(Get-ItemProperty -Path (Join-Path $registryBase 'Uninstall\*') -ErrorAction SilentlyContinue)) {
+                if ($entry.InstallLocation) { Add-InstallationCandidate ([string]$entry.InstallLocation) 'registry-uninstall' }
+            }
+        }
+        $SearchRoots = @([IO.DriveInfo]::GetDrives() | Where-Object {
+            $_.IsReady -and $_.DriveType -eq [IO.DriveType]::Fixed
+        } | ForEach-Object { $_.RootDirectory.FullName })
+    }
+    # Enumerate directory names only. Skip junctions, network/removable drives and
+    # protected OS trees; no strategy, account, history or user documents are read.
+    $didFileSearch = $found.Count -eq 0
+    if ($didFileSearch) {
+        $queue = [Collections.Generic.Queue[string]]::new()
+        $visited = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+        foreach ($searchDirectory in $SearchRoots) {
+            $absolute = Resolve-RootPath $searchDirectory
+            if ($absolute -and [IO.Directory]::Exists($absolute)) { $queue.Enqueue($absolute) }
+        }
+        while ($queue.Count -gt 0) {
+            if ($scanTimer.Elapsed.TotalSeconds -ge $SearchTimeoutSeconds) { $scanTimedOut=$true; break }
+            $directory = $queue.Dequeue()
+            if (!$visited.Add($directory)) { continue }
+            Add-InstallationCandidate $directory 'local-disk'
+            try { $children = [IO.Directory]::GetDirectories($directory) }
+            catch { ++$unreadable; continue }
+            foreach ($child in $children) {
+                try {
+                    $attributes=[IO.File]::GetAttributes($child)
+                    if (($attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { continue }
+                    $leaf=[IO.Path]::GetFileName($child)
+                    if ($leaf -in @('Windows', '$Recycle.Bin', 'System Volume Information')) { continue }
+                    $queue.Enqueue($child)
+                } catch { ++$unreadable }
+            }
+        }
+    }
+    $candidates = @($found.Values | Sort-Object root)
+    $usable = @($candidates | Where-Object { $_.cli })
+    $active = @($usable | Where-Object { $_.running })
+    $selectedRoot = $null
+    if ($usable.Count -eq 1) { $selectedRoot=$usable[0].root }
+    elseif ($active.Count -eq 1) { $selectedRoot=$active[0].root }
+    Write-Result ([ordered]@{
+        schema=$Schema; action='discover'; ok=$true; found=($candidates.Count -gt 0)
+        candidates=$candidates; selected_root=$selectedRoot
+        requires_selection=($usable.Count -gt 1 -and !$selectedRoot)
+        file_search_performed=$didFileSearch; timed_out=$scanTimedOut
+        unreadable_directory_count=$unreadable; skill_root=$SkillRoot
+    })
+}
+
 if ($Action -eq 'info') {
     # Reports the default directory and whether it already carries Panlifang.
-    # No filesystem/process/registry scanning happens here or anywhere else.
+    # The separate discover action performs read-only installation discovery.
     Write-Result ([ordered]@{
             schema       = $Schema
             action       = 'info'
@@ -128,13 +230,13 @@ if ($Action -eq 'set') {
             -Extra ([ordered]@{ root = $normalized })
     }
     $cliPath = Get-PlfCliPath $normalized
-    if (-not $cliPath) {
+    $hasExe = [IO.File]::Exists((Join-Path $normalized 'EJClient.exe'))
+    if (-not $cliPath -or -not $hasExe) {
         Write-Failure -Code 'ROOT_INVALID' `
-            -Message "Panlifang (plf-cli.exe) not found directly under $normalized, nor in $normalized\Debug or $normalized\Release." `
+            -Message "Expected EJClient.exe in $normalized and plf-cli.exe in that directory or its Debug/Release subdirectory." `
             -Extra ([ordered]@{ root = $normalized })
     }
 
-    $hasExe = Test-Path -LiteralPath (Join-Path $normalized 'EJClient.exe')
     if (-not (Test-Path -LiteralPath $UserDataDir)) {
         New-Item -ItemType Directory -Path $UserDataDir -Force | Out-Null
     }

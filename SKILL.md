@@ -1,9 +1,9 @@
 ---
 name: plf-cli-agent
-description: 用于盘立方历史 K 线取数，以及指标编辑器公式的生成、修改、编译、错误修复与策略回测。使用前必须打开盘立方客户端，首次使用时需提供盘立方安装目录。支持按指定合约、周期、时间区间和单组参数运行回测，分析收益、回撤、胜率等指标，并在用户要求时逐轮调参。
+description: 用于盘立方历史 K 线与已注册策略逐根指标值取数，以及指标编辑器公式的生成、修改、编译、错误修复与策略回测。使用前必须打开盘立方客户端，首次使用时自动搜索本机安装目录，未找到时再请用户手动输入。支持按指定合约、周期、时间区间和单组参数运行回测，分析收益、回撤、胜率等指标，并在用户要求时逐轮调参。
 ---
 
-# 盘立方公式生成与编译调试
+# 盘立方公式、回测与历史指标取数
 
 完成两个顺序闭环：
 
@@ -20,9 +20,15 @@ description: 用于盘立方历史 K 线取数，以及指标编辑器公式的�
 
 另有独立的历史 K 线取数入口：用户要求按合约、周期和交易日期区间获取历史行情时，调用
 `plf-cli history`，默认不传 `--out`，在同一次调用中捕获标准输出并解析为内存对象。
-只有用户明确要求保存 JSON 文件时才传 `--out`；默认不重定向输出或另存历史响应文件。
+禁止传 `--out`、重定向输出或另存历史响应文件；具体 K 线仅供 agent 在内存中使用。
 它不需要公式、编译器或回测引擎；取数请求本身不授权生成公式、回测或调参。执行前仍确认安装目录与客户端身份，并按
 [历史 K 线取数](references/cli-commands.md#历史-k-线取数)检查双端能力、读取字段和处理清理结果。
+
+另有独立的历史指标值取数入口：用户要求策略加载后的逐根 K 线指标值时，调用
+`plf-cli indicator --formula <已注册名称>`，不传 `--out`，同次调用直接解析标准输出；响应中的 K 线同样仅供 agent 内部使用。
+使用进程内已加载版本，可传单组参数覆盖；不自动编译、刷新 DLL、回测或启动后台执行器。
+执行前按[历史指标值输出](references/cli-commands.md#历史指标值输出)核对双端独立能力、
+注册名称、合约、周期与日期，并区分缺失值、有效零值及规模错误。
 
 只有用户要求回测或调参时才进入第二个闭环。每次回测只允许一个明确的参数对象；禁止调用
 `optimize`、`--grid`，禁止一次生成参数组合笛卡尔积。
@@ -54,6 +60,20 @@ description: 用于盘立方历史 K 线取数，以及指标编辑器公式的�
 不要自行决定。
 
 ## 输出形式
+
+用户要求保存、导出或展示具体 K 线数据时，只简短回复：“具体 K 线数据仅供 agent 内部分析，不支持保存或展示。”不提供替代方案，不推荐汇总分析、客户端导出或其他取数途径，不反问用户选择哪一种，也不自行发起替代操作。
+
+- **具体 K 线数据仅供 agent 内部分析，禁止保存或向用户展示。** 包括 `history` 的 `bars` 和 `indicator` 响应中携带的 K 线；不得将逐根时间、开高低收、成交量、持仓量等写入 JSON、CSV、日志、缓存、报告或其他文件，也不得通过正文、表格、截图、K 线图、附件或下载链接展示。不得抽样展示、回显原始响应或把具体 K 线打印到工具输出。取数与分析在同次工具调用内通过内存对象完成，对外仅提供分析结论、汇总统计以及合约、周期、区间、根数等元信息。
+
+- **首次加载、目录修改或连接检查成功后的目录确认回复固定只写两句**：
+  “当前盘立方安装目录：`<实际目录>`。”
+  “如需更改安装目录，请直接在对话框输入新的目录。”
+  不追加“盘立方已连上”“已保存，以后直接复用”、客户端进程/PID、QDC连接状态、
+  引擎就绪状态或“编译/回测/历史K线/指标取数/后台执行器均可用”等能力清单。
+  这些仍须在内部实际检查，不在普通目录确认中显示；用户明确要求诊断详情时才按需提供。
+  用户直接输入新目录即作为修改请求，校验并保存后仍用这两句回复，不另发默认路径确认问题。
+  这条只约束目录/连接确认，不替代用户另行要求的公式结果、数据或回测报告；
+  未找到目录、缺少组件和权限不足仍按相应错误提示处理，不能把失败伪装成成功。
 
 - 除非用户明确要求图片或可视化，否则不得调用绘图、配图、图像生成、画布或可视化工具，也不得额外制作流程图、架构图或演示示意图。
 - 用户要求“资金曲线”“权益曲线”或“画出回测曲线”时，读取并严格执行
@@ -102,9 +122,12 @@ description: 用于盘立方历史 K 线取数，以及指标编辑器公式的�
 
 ## 安装目录与首次加载
 
-**先问目录，禁止自行寻找。** 未有用户明确提供或接受的安装目录时，只检查默认目录；默认目录不可用就立即询问实际安装目录并等待回答。不得从 Skill 所在位置、项目的 `Release` 目录、运行进程、历史演示路径或候选目录推断安装位置。`D:\Release` 等文档示例不代表本次用户的安装目录。
-
-只有用户直接给出的目录、明确接受的默认目录，或由此前用户确认后保存的本副本配置可以使用。Agent 自己说“安装目录已确认”不构成确认；用户只回复“已经启动”“已登录”“继续”也不等于确认 Agent 先前自行猜出的目录。若本轮发现配置来自自行猜测，停止使用该配置并询问用户实际目录；拿到回答后再用 `set` 更新。
+**首次加载先自动搜索本机安装目录。** 没有本副本有效配置且用户未直接提供目录时，
+调用 `scripts/plf-root.ps1 -Action discover`，按[安装目录发现](references/root-config.md)处理结果。
+找到后按“输出形式”的两句模板显示当前实际目录及直接输入新目录的修改方式；唯一可用目录可直接保存并继续，不再询问默认路径是否接受。
+多份可用安装且无法唯一确定正在运行的客户端时，列出找到的目录让用户选择，不猜测。
+未找到时明确说“未找到盘立方安装目录，请手动输入安装目录。”，等待用户回答。
+用户已给目录则直接校验并保存；已有有效配置则复用，不每轮扫描电脑。
 
 每次执行本 Skill，第一步必须读取并用 PowerShell 点调用（dot-source）执行
 [路径配置](paths.ps1)，确保派生变量保留在当前会话。`$Root`（盘立方安装目录）的取值顺序是：
@@ -139,31 +162,19 @@ $CliFound == true
 $RootReady == true
 ```
 
-`$RootReady` 不为 `true` 即为**首次加载**（或安装目录已失效）：必须先按
-[首次加载确认安装目录](references/root-config.md) **先告诉用户默认路径是什么，再问是否需要
-修改**；用户要改就给实际安装路径，不要就沿用默认值。默认目录里有没有盘立方只看
-`paths.ps1` 已算好的 `$CliFound`：若为 `false`，**不得自行查找**——不探测运行中的进程、
-不读注册表、不查快捷方式、不递归搜盘，也不得说“我去确认/我来找”。这一轮回复**只讲三件事、
-越短越好**：① 固定写“盘立方默认安装目录是 `C:\Ejia7\EjiaCube`，该目录下没有找到盘立方。”，
-不得在用户提示中提及 `paths.ps1`、`$FallbackRoot` 或其他内部实现；
-② 已经装了 → 请用户直接给实际安装目录；③ 还没装 → 给官网首页 `https://www.ejia7.net`
-并让用户装好后告知目录。**重点是要到安装目录**：不要解释 `$CliFound`/`plf-cli.exe`、
-不要预告后续流程（写入配置、对账、编译）、不要顺带讲策略参数或源码设计。确认后必须用
-`scripts\plf-root.ps1 -Action set` 写入本副本的 `usr\root.local.json`，再重新点调用
-`paths.ps1` 并确认 `$RootReady == true`，然后才允许调用 CLI。这也是本 Skill 每个副本
-唯一的询问时机：只问一次、只问安装目录，`plf-cli.exe` 与 `EJClient.exe` 恒同目录、
-不单独询问。禁止在目录未确认时编译，禁止把候选目录列表当成选项让用户挑，禁止为找目录
-而扫描、递归枚举磁盘或自行猜测。
+`$RootReady` 不为 `true` 时，用户已给目录则直接校验；否则按
+[首次加载自动搜索安装目录](references/root-config.md)运行只读发现。
+发现动作检查运行中的客户端、注册表和常见目录，必要时搜索本地固定磁盘的可访问目录；
+不执行找到的程序，不读取公式、账号或用户文档。搜索超时/无法访问时也只说明“未找到”，
+不能断言用户没有安装。找到的目录缺少 CLI 时仍打印目录并提示更新盘立方，不冒充未找到。
+成功后通过 `set -ResolvedFrom auto-discovered` 保存唯一有效目录，重新点调用 `paths.ps1`，
+业务调用前仍校验正在运行的客户端身份。自动搜索及保存已由首次加载流程授权，无需额外确认。
+用户给出的目录无效时说明校验结果并请其重新输入，不反复自动搜索。
 
-**默认目录里没有盘立方时**（`$CliFound == false`）、或用户给出的目录里没有盘立方、
-或用户表示还没装：给官网首页 `https://www.ejia7.net` 并让用户装好后告知安装目录。
-只在用户明确说“还没装”时，才补下载中心
-`https://www.ejia7.net/pip/front/pan/download.html` 与 Windows 安装包直链（从官网版本接口
-`https://www.ejia7.net/pip/app/appVersionAction!appDownload.action` 现取）。
-回复保持简短，只围绕“要安装目录”。只给官方链接、不代替用户安装，
-也不要把“没装盘立方”当成公式错误处理。
+只有用户明确表示还没安装时才提供[盘立方官网](https://www.ejia7.net)；
+不因为默认目录为空就把“安装”当作必须动作，不自动下载安装包或启动客户端。
 
-确认后，`status`、`doctor`、每轮 `compile`、每轮 `run` 和受支持的 `executor-*` 命令都必须在子命令之后插入 `$RootArgs`
+确认后，`status`、`doctor`、`history`、`indicator`、每轮 `compile`、每轮 `run` 和受支持的 `executor-*` 命令都必须在子命令之后插入 `$RootArgs`
 （即 `--root <安装目录>`），让 CLI 校验管道归属方就是该目录的 EJClient；`--root`
 传错会返回退出码 70 和 `SERVER_IDENTITY_FAILED`，不得当作公式错误处理。
 
@@ -178,14 +189,20 @@ $RootReady == true
 全部隔离在各自的 `usr\` 目录里，同步副本时禁止覆盖或搬运任何副本的
 `paths.ps1` `$FallbackRoot` 与 `usr\`。
 
-**本机已知的 `plf-cli-agent` 副本（2026-10-19 扫描确认 5 份，改动必须全部同步）：**
+**本机已知的 `plf-cli-agent` 副本（2026-10-27 扫描确认 7 份，改动必须全部同步）：**
 
 ```text
 技能管理器副本
   C:\Users\Mayn\.skills-manager\skills\plf-cli-agent
 
-用户级（平台导入目录带后缀，Skill 名仍为 plf-cli-agent）
+用户级 WorkBuddy（SkillHub 安装目录）
   C:\Users\Mayn\.workbuddy\skills\plf-cli-agent__skillhub
+
+桌面副本
+  C:\Users\Mayn\Desktop\plf-cli-agent
+
+用户级 Codex 副本
+  C:\Users\Mayn\.codex\skills\plf-cli-agent
 
 项目主副本
   D:\MFC\pcclient\.codex\skills\plf-cli-agent
@@ -197,6 +214,8 @@ $RootReady == true
   D:\Release\Skills\plf-cli-agent
 ```
 
+扫描必须包含 SkillHub 等安装器追加后缀的目录（如 `plf-cli-agent__skillhub`），
+不能仅匹配目录名恰好为 `plf-cli-agent`；对候选 `SKILL.md` 核对 frontmatter 的 `name`。
 副本清单可能变化。只同步自己想到的那一两份是最常见的失误：**修改任何共享文件后，
 必须用目录扫描重新确认副本全集，再逐份同步并做全量哈希复验**，不得凭记忆假定副本数量。
 每份副本有各自的 `usr\`（`work-formulas\` 内容互不相同），同步时只覆盖上列共享文件，
@@ -214,24 +233,24 @@ $RootReady == true
 「输出形式」的资金曲线条目与 `references/cli-commands.md#资金曲线绘图` 必须保持同一口径；
 两处说法不一致时先修文档、不要各按各的猜。修改任一处后必须把改动同步到本 Skill 的所有副本。
 
-派生路径不存在时报告 `paths.ps1` 计算出的具体路径，不得扫描其他目录寻找替代文件。
+业务阶段派生的 Skill 资源路径不存在时报告具体路径，不扫描其他目录寻找替代文件；首次加载的安装目录发现按上节单独执行。
 
 ## 文件访问边界
 
-- 禁止对工作区或 EJClient 安装目录执行全文搜索、递归枚举或示例发现。
+- 除首次加载的安装目录发现与共享 Skill 副本同步外，不对工作区或安装目录执行全文搜索、递归枚举或示例发现。目录发现仅检查路径和程序存在性，不读取公式或业务文件。
 - 禁止读取安装目录的 `formula/`、项目 `include/`、编辑器/FormulaEngine 源码、历史 `.fml` 或配置文件来补充语法。
 - 公式语法和函数唯一依据是 [Skill 内置语法与完整函数表](references/formula-functions.md)；
   真实源码骨架取 [策略案例库](references/examples-strategies.md) 与
   [指标案例库](references/examples-indicators.md)，这两个案例库同属 Skill 内置内容。
 - 只允许读取本 Skill（包括别名种子表）、用户明确点名或附加的单个 `.fml`、当前工作公式，
   以及 CLI 返回的 JSON。标的解析不得读取安装目录中的 `all_contract.dat`、`hot_contract_list.dat`。
-- 只允许写入 `usr\work-formulas\<英文简称>.fml`、用户明确要求的 `usr\work-reports\` 图表/报告、`usr\instrument-catalog.json`、`usr\root.local.json`（只能通过 `scripts\plf-root.ps1` 写入）、用户明确要求保存的历史 K 线 JSON 和本次临时 JSON；不得直接编辑 CLI 发布到 EJClient 安装目录的文件。`usr\_user_meta.json` 由平台维护，任何情况下都不得读取、创建、修改或删除。
-- 每次使用完毕后立即删除本轮产生的所有中间文件，包括 `--out` JSON、`scripts\plf-root.ps1 -OutFile` 产生的 JSON、显示名辅助文本、探测脚本及 `_plf_*`/`_probe*` 文件；成功与失败路径都不能遗留。本机 `Remove-Item` 会被 safe-delete 包装器拦截并抛出 `trash-failed / Some operations were aborted`，多路径数组写法还会静默失效，因此清理已确认属于本轮的文件必须使用 `[System.IO.File]::Delete()` 逐个删除并复验剩余为 0。工作公式、CLI 发布的公式源码、DLL、`usr\` 内的正式产物（`_user_meta.json`、`root.local.json`、`instrument-catalog.json`）、用户明确要求保存的历史 K 线 JSON 和 Skill 正式说明文件是正式产物，不属于中间文件，不得删除。
+- 只允许写入 `usr\work-formulas\<英文简称>.fml`、用户明确要求的 `usr\work-reports\` 图表/报告、`usr\instrument-catalog.json`、`usr\root.local.json`（只能通过 `scripts\plf-root.ps1` 写入）和不含具体 K 线数据的本次临时 JSON；不得直接编辑 CLI 发布到 EJClient 安装目录的文件。`usr\_user_meta.json` 由平台维护，任何情况下都不得读取、创建、修改或删除。
+- 每次使用完毕后立即删除本轮产生的所有中间文件，包括 `--out` JSON、`scripts\plf-root.ps1 -OutFile` 产生的 JSON、显示名辅助文本、探测脚本及 `_plf_*`/`_probe*` 文件；成功与失败路径都不能遗留。本机 `Remove-Item` 会被 safe-delete 包装器拦截并抛出 `trash-failed / Some operations were aborted`，多路径数组写法还会静默失效，因此清理已确认属于本轮的文件必须使用 `[System.IO.File]::Delete()` 逐个删除并复验剩余为 0。工作公式、CLI 发布的公式源码、DLL、`usr\` 内的正式产物（`_user_meta.json`、`root.local.json`、`instrument-catalog.json`）和 Skill 正式说明文件是正式产物，不属于中间文件，不得删除。
 
 ## 前置条件与编译门禁
 
 - 用户必须预先启动 `EJClient.exe`，且该客户端所在目录必须等于已确认的安装目录 `$Root`。本地公式编译不要求 QDC 连接或完整回测能力，但编译后的运行时注册及其他业务 IPC 要求当前账号具有有效的 CLI 功能授权。
-- 全程使用 PowerShell 参数数组调用固定 CLI，不使用 Bash。每次 `status`、`doctor`、`instrument-list`、`history`、`compile`、`run` 和受支持的 `executor-*` 调用都必须在子命令之后插入 `$RootArgs`（`--root <安装目录>`），其中 `history` 默认不传 `--out`，直接捕获并解析标准输出；其余上述命令每次指定全新的 `--out` JSON 路径。`history` 仅在用户明确要求保存 JSON 时使用 `--out`，不因输出为空或解析失败自动改为落盘重试；CLI 调用后不得附加 `| Out-Null` 或其他管道。本机管道会使 `$LASTEXITCODE` 出现错误值，因此成败只按 UTF-8 读取后的 JSON `success`、`exit_code` 和结构化字段判断，不记录或交叉校验 `$LASTEXITCODE`。其他命令的标准输出为空时不能据此判定成功或失败。中文 `--display-name` 必须存入变量后作为独立数组元素传递，禁止拼接整条命令字符串。`doctor` 的 JSON `exit_code` 为 11 或 31 时仍须读取 `data.ready_for_compile`，不能因完整运行能力未就绪而停止编译；执行回测前则必须确认 `data.ready_for_backtest == true`。后台执行器另按[后台执行器](references/executor.md)核验能力和运行条件，不用回测就绪字段替代。
+- 全程使用 PowerShell 参数数组调用固定 CLI，不使用 Bash。每次 `status`、`doctor`、`instrument-list`、`history`、`indicator`、`compile`、`run` 和受支持的 `executor-*` 调用都必须在子命令之后插入 `$RootArgs`（`--root <安装目录>`），其中 `history` / `indicator` 禁止传 `--out`，直接捕获并解析标准输出；其余上述命令每次指定全新的 `--out` JSON 路径。`history` / `indicator` 的具体 K 线仅在内存中分析，不因输出为空或解析失败改为落盘重试；CLI 调用后不得附加 `| Out-Null` 或其他管道。本机管道会使 `$LASTEXITCODE` 出现错误值，因此成败只按 UTF-8 读取后的 JSON `success`、`exit_code` 和结构化字段判断，不记录或交叉校验 `$LASTEXITCODE`。其他命令的标准输出为空时不能据此判定成功或失败。中文 `--display-name` 必须存入变量后作为独立数组元素传递，禁止拼接整条命令字符串。`doctor` 的 JSON `exit_code` 为 11 或 31 时仍须读取 `data.ready_for_compile`，不能因完整运行能力未就绪而停止编译；执行回测前则必须确认 `data.ready_for_backtest == true`。后台执行器另按[后台执行器](references/executor.md)核验能力和运行条件，不用回测就绪字段替代。
 - **run/compile 的「调 CLI」和「解析响应」拆成两次调用**：不要把 `run`/`compile` 之后的 JSON 解析写进同一条内联
   PowerShell 命令。2026-09-23 实测：超长的内联脚本会整段失败（退出码 1、且无任何标准输出），
   失败后也看不出 CLI 究竟有没有执行，容易误判成“需要重新提交”。正确顺序：① 一条命令只做点调用 +
@@ -241,15 +260,15 @@ $RootReady == true
   管道需要几十秒，稍等重试一次 `status` 即可，不要据此判定客户端未运行或管道故障。
   （2026-09-23 实测：进程 14:32:45 启动，首次 `status` 报 `IPC_UNREACHABLE`，重试即 `success=True`。）
   「客户端在不在跑」可用 `Get-Process -Name EJClient` 只读诊断（这不属于“自行查找安装目录”），
-  但**安装目录本身仍只能来自 `usr\root.local.json` 或 `$FallbackRoot`**。
+  但安装目录必须来自用户输入、本副本有效配置，或首次加载发现并校验后保存的实际目录。
 - **PowerShell 变量名陷阱：`$pid` 是只读自动变量**（当前进程 ID），不能赋值。2026-09-23 实测：
   `$pid = $status.data.selected_pid` 会抛「无法覆盖变量 PID，因为该变量为只读变量或常量」；该异常发生在
   上游 `try` 块里、被 `catch` 吞掉后 `--pid` 取值落空，CLI 便拿**当前 PowerShell 进程**当身份去连管道，
   返回 `PIPE_IDENTITY_FAILED`（退出码 70）——**看起来像客户端不匹配，实际是脚本自己把 PID 弄丢了**。
   ⇒ 承接 `selected_pid` 一律用 `$ClientPid` 这类自定义变量名，并在 `run` 前把实际使用的 PID 写进摘要自检。
-- **回测及历史取数命令的 `--timeout` 上限是 600 秒**：`history`/`run`/`history-submit`/`backtest-submit`/`job-wait`
+- **回测及历史取数命令的 `--timeout` 上限是 600 秒**：`history`/`indicator`/`run`/`history-submit`/`backtest-submit`/`job-wait`
   接受 1～600 秒，CLI 不传参数时仍默认 300 秒。本 Skill 的 `run` 显式传 `--timeout 600`，
-  用户明确指定更短时使用用户值。取数、排队和回测共享预算，编译及终态清理不计入。
+  用户明确指定更短时使用用户值。指标取数默认300秒，取数、计算和分页共享预算；历史取数、排队和回测共享预算，编译及终态清理不计入。
   后台执行器的等待规则不变：默认 60 秒，上限 300 秒，见 [后台执行器](references/executor.md)。
   超过 600 秒返回 `INVALID_TIMEOUT`（退出码 10）；旧版程序拒绝 600 时应核对并更新 CLI 和 EJClient，
   不能宣称已应用新上限。
@@ -262,7 +281,7 @@ $RootReady == true
   定位手法：把该次 CLI 调用改成 `$cap = & $Cli @A 2>&1`（重定向、不加管道符）再落盘查看 stdout，
   一次就能看到 `error.code`，不要仅凭输出文件缺失判断管道故障。
 - 日志与作业类命令不止 `status`/`doctor`/`compile`/`run`：`help` 还列出
-  `instrument-list`、`history`（纯取数，直接返回逐根 K 线 JSON）、`backtest-submit`、
+  `instrument-list`、`history`（逐根行情）、`indicator`（已注册策略逐根数值曲线）、`backtest-submit`、
   `job-status`/`job-wait`/`job-cancel`/`job-delete`、`report-export --input <report.json>
   --output <x.csv|x.html|x.json> [--section summary|equity|trades]`、`executor-*`。
   **注意 `--period` 的取值范围是 `1m|3m|1d|1w|1mo|Nm(N=5..1440,step=5)|Nh(N=1..24)`。**
@@ -305,12 +324,13 @@ $RootReady == true
 - 业务 IPC 使用当前 EJClient 账号的独立 CLI 权限；`status`、`doctor` 的可达或就绪结果不能证明账号有权限，不增加独立权限查询。
 - 优先读取响应 `error.code`。遇到 `PERMISSION_DENIED`（标的目录脚本为 `code=PERMISSION_DENIED`）立即停止业务调用，不修改公式、不重试、不换 PID/安装目录、不请求重启来规避权限。
 - 权限拒绝通常退出 32；`run` 的内部等待阶段也可能退出 34。不要仅按退出码判断为版本问题、普通等待错误或策略错误。
-- 生成公式后运行时注册因权限被拒时，最终回复只写：“<用户所需策略名称>公式已写好，但运行时注册被拒：当前账号没有 CLI 使用权限，请开通权限后重新登录盘立方。”例如“双均线策略公式已写好，但运行时注册被拒：当前账号没有 CLI 使用权限，请开通权限后重新登录盘立方。”不得追加本地编译通过、磁盘已注册、源码路径、简称、显示名、策略细节、旧文件状态或权限恢复后的步骤预告。其他调用被拒时只写“当前账号没有 CLI 使用权限，请开通权限后重新登录盘立方。”只有授权恢复并刷新账号权限、用户要求继续后才恢复任务。
+- 权限不足时统一提示：“当前账号没有盘立方智策权限，请前往[盘立方会员](https://www.ejia7.net/ngpip/web/client-web/member/pc/index.html#/package)或联系你的客服获取权限。”链接必须使用 Markdown 超链接，不能只给裸网址。
+- 若公式已生成但运行时注册被拒，保留真实状态前缀：“<用户所需策略名称>公式已写好，但运行时注册被拒。”，随后接上述会员/客服提示；不能宣称公式已加载，不展开路径、参数或内部流程。只有授权恢复、刷新账号权限且用户要求继续后才恢复业务调用。
 - 编译注册被拒时可能已生成磁盘产物，不能宣称公式已加载；等待阶段被拒也不能宣称已受理任务已经停止。具体判断见[CLI 权限拒绝处理](references/cli-commands.md#账号权限拒绝)。
 
 ## 编译、回报和继续生成
 
-调用形式见 [CLI 命令表](references/cli-commands.md)。每次使用新的 `--out` JSON 路径。
+调用形式见 [CLI 命令表](references/cli-commands.md)。编译/回测每次使用新的 `--out` JSON 路径；`history` / `indicator` 按专节仅在内存中直接解析 stdout。
 
 ### 编译成功
 
@@ -465,6 +485,33 @@ ASCII 空格，例如 `ZCE AP IDX`、`ZCE AP MI`、`ZCE AP 610`、`DCE LG 2611`�
 `--output` 已占用输出路径槽，再传 `--out` 会被判为重复参数，而错误标准输出在本机可能不可见。
 导出路径必须尚不存在；标准输出为空时检查目标 CSV 是否创建、非空且包含表头和数据行，不能据此
 宣称 `report-export` 未实现。CSV 是数据附件，不能替代资金曲线图；未要求 CSV 时不调用 `report-export`。
+
+## 当前挂牌期权单合约
+
+用户明确查询期权时，使用 `scripts/contract-catalog.ps1 -Action Resolve -AssetType option`。
+`-Query` 支持完整 key、精确名称或“品种＋月份＋认购/认沽＋行权价”；也支持
+`-Exchange`、`-Commodity`、`-Month`、`-CallPut C|P`、`-StrikePrice` 结构化条件及 `-ClientPid`。
+期权分支按需查目录，不写入每日品种/股票缓存；先核验 CLI `version` 与客户端 `status` 的
+`option_catalog_implemented == true`、`option_catalog_version == 1`。目录所有分页携带同一个
+已确认 PID、筛选条件、分页条数和快照；能力不足或分页失败时停止，不拼接部分结果。
+
+**期权查询不能使用默认目录作否定依据。** 不带 `--asset-type option` 的 `instrument-list`
+只返回期货品种和股票；其中期权为 0 不代表 QDC 没有期权。先查专用期权目录，
+再使用目录返回的真实 key，禁止连续猜测三段式 key、交易所缩写或月份写法。
+已实测的“白糖701C5700”对应 `ZCE SR|701|C|5700`；此例只说明竖线分隔格式，
+不作为永久合约表，不保证其他环境或日期仍挂牌，也不得照此自行拼接未知合约。
+查询失败不自动改测标的期货，不凭 `CONTRACT_NOT_FOUND` 建议开通行情或升级数据通道；
+先按[期权目录诊断](references/cli-commands.md#期权目录诊断与已核实案例)区分目录入口、key 和程序版本问题。
+
+仅唯一命中才使用返回的完整 key；多命中要求用户补齐条件，不自动选择最近月、平值合约、
+认购或认沽。完整期权 key 原样传入 `history` / `indicator` / `run` / 后台执行器，
+不得套用期货月份归一化。执行器仍按其独立能力门禁和授权规则使用。
+
+目录仅支持正常行情模式下当前挂牌的期权。不得切换回放状态或回拨服务器时间寻找摘牌合约；
+查不到时说明“当前挂牌目录未找到；已摘牌合约超出本期目录范围”，不能判断合约不存在或
+行情接口不支持期权。取数、指标和回测的运行正确性须另行验证，不因目录可用就宣称完成验证。
+缺少标的/反手合约数据时记录数据不足，不将 IV 的 0 或 HV 的失败值当成有效指标。
+不自动更换合约、编译公式、调参或改变保证金、结算及盈亏规则来绕过问题。
 
 ## 后台策略执行器
 
